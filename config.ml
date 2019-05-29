@@ -35,6 +35,8 @@ let packages =
   ; package ~pin:irmin_pin "irmin-git"
   ; package ~pin:irmin_pin "irmin-mirage"
   ; package ~pin:multipart_form "multipart_form"
+  ; package ~sublibs:["c"] "checkseum"
+  ; package ~sublibs:["c"] "digestif"
   ; package "uuidm"
   ; package "tyxml" ]
 

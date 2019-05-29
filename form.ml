@@ -13,14 +13,9 @@ let post_href = Xml.uri_of_string "/"
 let css_href = Xml.uri_of_string "/pastisserie.css"
 
 let options =
-  let mldown = checkbox
-      ~name:"mldown"
-      ~label:[ txt "Format with"; space ()
-             ; a ~a:[ a_href mldown_href ] [ txt "mldown" ] ]
-      () in
   let ln = checkbox ~name:"ln" ~label:[ txt "Line numbers" ] () in
   let raw = checkbox ~name:"raw" ~label:[ txt "Raw paste" ] () in
-  [ mldown; ln; raw; br () ]
+  [ ln; raw; br () ]
 
 let language lst =
   let fn (name, lang) = option ~a:[ a_value lang ] (txt name) in
