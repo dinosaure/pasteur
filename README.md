@@ -68,3 +68,7 @@ $ ./main.native
 ```
 
 It listens into 4343, so you can open `http://127.0.0.1:4343` and see your Git repository feeded.
+
+[http-af]: https://github.com/inhabitedtype/httpaf
+[ocaml-git]: https://github.com/mirage/ocaml-git
+[irmin]: https://github.com/mirage/irmin
