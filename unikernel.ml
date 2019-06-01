@@ -1,6 +1,9 @@
 open Lwt.Infix
 open Httpaf
 
+module Checkseum = Checkseum
+module Digestif = Digestif
+
 module Option = struct
   let bind a f = match a with Some a -> f a | None -> None
   let ( >>= ) = bind
@@ -125,7 +128,7 @@ module Make
     (Conduit : Conduit_mirage.S)
     (HTTP : Httpaf_mirage.Server_intf)
 = struct
-  module Store = Irmin_mirage.Git.Mem.KV(T)
+  module Store = Irmin_mirage_git.Mem.KV(T)
   module Sync = Irmin.Sync(Store)
 
   let log console fmt = Fmt.kstrf (Console.log console) fmt
