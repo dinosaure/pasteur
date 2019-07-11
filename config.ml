@@ -29,6 +29,7 @@ let packages =
   ; package ~pin:"git+https://github.com/mirage/encore.git" "encore"
   ; package ~pin:"git+https://github.com/mirage/ke.git" "ke"
   ; package ~pin:"git+https://github.com/mirage/pecu.git" "pecu"
+  ; package ~pin:"git+https://github.com/mirage/decompress.git" "decompress"
   ; package ~pin:git_pin "git"
   ; package ~pin:git_pin "git-http"
   ; package ~pin:git_pin "git-mirage"
