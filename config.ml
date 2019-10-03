@@ -19,7 +19,7 @@ let console = console
 let public = generic_kv_ro "public"
 
 let packages =
-  let irmin_pin = "git+https://github.com/mirage/irmin.git" in
+  let irmin_pin = "git+https://github.com/pascutto/irmin.git#git_pp" in
   let git_pin = "git+https://github.com/mirage/ocaml-git.git" in
   let multipart_form = "git+https://github.com/dinosaure/multipart_form.git" in
 
