@@ -22,27 +22,32 @@ let packages =
   let irmin_pin = "git+https://github.com/mirage/irmin.git" in
   let git_pin = "git+https://github.com/mirage/ocaml-git.git" in
   let multipart_form = "git+https://github.com/dinosaure/multipart_form.git" in
-  [ package ~pin:"git+https://github.com/mirage/mirage-http.git#wip" "mirage-http"
-  ; package ~pin:"git+https://github.com/anmonteiro/httpaf.git#mirage" "httpaf"
-  ; package ~pin:"git+https://github.com/anmonteiro/httpaf.git#mirage" "httpaf-mirage"
-  ; package ~pin:"git+https://github.com/anmonteiro/httpaf.git#mirage" "httpaf-lwt"
-  ; package ~pin:"git+https://github.com/mirage/encore.git" "encore"
-  ; package ~pin:"git+https://github.com/mirage/ke.git" "ke"
-  ; package ~pin:"git+https://github.com/mirage/pecu.git" "pecu"
-  ; package ~pin:"git+https://github.com/mirage/decompress.git" "decompress"
+
+  [ package ~pin:"git+https://github.com/dinosaure/httpaf.git#mirage" "httpaf"
+  ; package ~pin:"git+https://github.com/dinosaure/httpaf.git#mirage" "httpaf-mirage"
+  ; package ~pin:"git+https://github.com/dinosaure/httpaf.git#mirage" "httpaf-lwt"
+
+  ; package ~pin:"git+https://github.com/mirage/uuuu.git" "uuuu"
+  ; package ~pin:"git+https://github.com/mirage/coin.git" "coin"
+  ; package ~pin:"git+https://github.com/mirage/yuscii.git" "yuscii"
+  ; package ~pin:"git+https://github.com/mirage/rosetta.git" "rosetta"
+  ; package ~pin:multipart_form "multipart_form"
+
   ; package ~pin:git_pin "git"
   ; package ~pin:git_pin "git-http"
   ; package ~pin:git_pin "git-mirage"
+
   ; package ~pin:irmin_pin "irmin"
   ; package ~pin:irmin_pin "irmin-mem"
   ; package ~pin:irmin_pin "irmin-git"
   ; package ~pin:irmin_pin "irmin-mirage"
   ; package ~pin:irmin_pin "irmin-mirage-git"
-  ; package ~pin:multipart_form "multipart_form"
+
   ; package "uuidm"
   ; package "tyxml"
-  ; package ~sublibs:["c"] "checkseum"
-  ; package ~sublibs:["c"] "digestif" ]
+
+  ; package ~sublibs:["c"] "checkseum" ~min:"0.1.1"
+  ; package ~sublibs:["c"] "digestif" ~min:"0.8.0" ]
 
 let () =
   register "pasteur"
