@@ -33,7 +33,7 @@ let packages =
   ; package ~pin:"git+https://github.com/mirage/rosetta.git" "rosetta"
   ; package ~pin:multipart_form "multipart_form"
 
-  ; package ~pin:"git+https://github.com/mirage/decompress.git#v0.9.0+bigarray-compat" "decompress"
+  ; package ~min:"0.9.1" "decompress"
   ; package ~pin:git_pin "git"
   ; package ~pin:git_pin "git-http"
   ; package ~pin:git_pin "git-mirage"
