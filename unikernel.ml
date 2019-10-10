@@ -152,7 +152,6 @@ module Make
 
   let show console store remote reqd target () =
     let open Httpaf in
-    let request = Reqd.request reqd in
     log console "Want to access to: %a." Fmt.(Dump.list string) target >>= fun () ->
     load console store remote target >>= function
     | None ->
@@ -190,7 +189,7 @@ module Make
         else Lwt.return INDEX
       | _ :: _ -> Lwt.return (GET target)
 
-  let index console reqd () =
+  let index _ reqd () =
     let headers = Headers.of_list [ "transfer-encoding", "chunked" ] in
     let response = Response.create ~headers `OK in
     let languages = List.map (fun c -> Language.string_of_language c, Language.value_of_language c) Language.all in
@@ -201,7 +200,7 @@ module Make
     Body.close_writer body ;
     Lwt.return ()
 
-  let load console public reqd key () =
+  let load _ public reqd key () =
     Public.get public key >>= function
     | Error _ -> assert false
     | Ok contents ->
@@ -281,9 +280,9 @@ module Make
            Lwt.return (Reqd.respond_with_string reqd response (Printexc.to_string exn))) in
     Lwt.async (fun () -> res)
 
-  let error_handler ?request error k = ()
+  let error_handler ?request:_ _ _ = ()
 
-  let start random console clock public resolver conduit http =
+  let start _ console clock public resolver conduit http =
     connect resolver conduit >>= fun (store, remote) ->
     Sync.pull store remote `Set >>= function
     | Ok `Empty -> failwith "Empty remote repository"
