@@ -282,7 +282,7 @@ module Make
 
   let error_handler ?request:_ _ _ = ()
 
-  let start _ console clock public resolver conduit http =
+  let start _ console _ public resolver conduit http =
     connect resolver conduit >>= fun (store, remote) ->
     Sync.pull store remote `Set >>= function
     | Ok `Empty -> failwith "Empty remote repository"
