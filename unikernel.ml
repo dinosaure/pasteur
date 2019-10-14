@@ -240,23 +240,12 @@ module Make
     Public.get public key >>= fun contents -> match contents, Mirage_kv.Key.segments key with
     | Error _, _ -> assert false
     | Ok contents, [ "highlight.pack.js" ] ->
-      let max = String.length contents in
-      let pos = ref 0 in
       let headers = Headers.of_list
-          [ "transfer-encoding", "chunked"
+          [ "content-length", string_of_int (String.length contents)
           ; "content-type", "text/javascript" ] in
       let response = Response.create ~headers `OK in
-      let body = Reqd.respond_with_streaming reqd response in
-      let rec write () =
-        let len = min (max - !pos) 4096 in
-        if len = 0
-        then ( Body.write_string body "0\r\n\r\n" ; Body.close_writer body )
-        else ( Body.write_string body (Fmt.strf "%X\r\n" len)
-             ; Body.write_string body ~off:!pos ~len contents
-             ; Body.write_string body "\r\n"
-             ; pos := !pos + len
-             ; Body.flush body write ) in
-      write () ; log console "highlight.pack.js delivered!"
+      Reqd.respond_with_string reqd response contents ;
+      log console "highlight.pack.js delivered!"
     | Ok contents, [ "pastisserie.css" ] ->
       let headers = Headers.of_list
           [ "content-length", string_of_int (String.length contents)
