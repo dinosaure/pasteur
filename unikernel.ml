@@ -256,7 +256,8 @@ module Make
              ; Body.write_string body "\r\n"
              ; pos := !pos + len
              ; Body.flush body write ) in
-      write () ; log console "highlight.pack.js delivered!"
+      Lwt.async (fun v -> write v ; Lwt.return ()) ;
+      log console "highlight.pack.js delivered!"
     | Ok contents, [ "pastisserie.css" ] ->
       let headers = Headers.of_list
           [ "content-length", string_of_int (String.length contents)
