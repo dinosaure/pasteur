@@ -256,8 +256,7 @@ module Make
              ; Body.write_string body "\r\n"
              ; pos := !pos + len
              ; Body.flush body write ) in
-      Lwt.async (fun v -> write v ; Lwt.return ()) ;
-      log console "highlight.pack.js delivered!"
+      write () ; log console "highlight.pack.js delivered!"
     | Ok contents, [ "pastisserie.css" ] ->
       let headers = Headers.of_list
           [ "content-length", string_of_int (String.length contents)
@@ -342,16 +341,16 @@ module Make
 
   let request_handler random console public store remote reqd =
     let open Httpaf in
-    let res =
+    let res () =
       Lwt.catch
         (fun () -> dispatch public reqd >>= main random console public store remote reqd)
         (fun exn ->
            let res = Printexc.to_string exn in
            log console "Got an error: %s." res >>= fun () ->
-           let headers = Headers.of_list [ "content-length", string_of_int (String.length res) ] in
+           let headers = Headers.of_list [ "connection", "close" ] in
            let response = Response.create ~headers `Internal_server_error in
            Lwt.return (Reqd.respond_with_string reqd response (Printexc.to_string exn))) in
-    Lwt.async (fun () -> res)
+    Lwt.async res
 
   let error_handler ?request:_ _ _ = ()
 
