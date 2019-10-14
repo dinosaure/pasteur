@@ -62,6 +62,7 @@ let string_of_key = function
   | Raw -> "raw" | Hl -> "hl"
 
 let pp_string ppf x = Fmt.pf ppf "%S" x
+let blit src src_off dst dst_off len = Bigstringaf.blit src ~src_off dst ~dst_off ~len
 
 let extract_parts content_type body =
   let open Angstrom.Unbuffered in
@@ -73,23 +74,45 @@ let extract_parts content_type body =
       Hashtbl.add hashtbl key stream ; push, Some key
     | None -> (fun _ -> ()), None in
   let state = ref (parse (Multipart_form.parser ~emitters content_type)) in
+  let th, wt = Lwt.task () in
+  let rb = Bigstringaf.create 4096 in
+  let ke = Ke.Rke.Weighted.from rb in
   let tree = ref None in
-  let on_eof () = match !state with
-    | Partial { continue; _ } ->
-      state := continue Bigstringaf.empty ~off:0 ~len:0 Complete
-    | Fail _ -> assert false
-    | Done (_, v) -> tree := Some v in
-  let on_read buf ~off ~len = match !state with
-    | Partial { continue; _ } ->
-      state := continue buf ~off ~len Incomplete
-    | Fail _ -> assert false
-    | Done (_, v) -> tree := Some v in
-  Body.schedule_read body ~on_eof ~on_read ;
+  let rec on_eof () =
+    Fmt.epr ">>> ON EOF\n%!" ;
+    match !state with
+    | Partial { continue; committed; } ->
+      Ke.Rke.Weighted.N.shift_exn ke committed ;
+      Ke.Rke.Weighted.compress ke ;
+      ( match Ke.Rke.Weighted.N.peek ke with
+        | [] -> state := continue rb ~off:0 ~len:0 Complete
+        | [ buf ] -> state := continue buf ~off:0 ~len:(Bigstringaf.length buf) Complete
+        | _ -> assert false ) ;
+      on_eof ()
+    | Fail _ -> Fmt.epr "FAIL > WAKE UP\n%!" ; Lwt.wakeup wt ()
+    | Done (_, v) -> Fmt.epr "DONE > WAKE UP\n%!" ; tree := Some v ; Lwt.wakeup wt ()
+  and on_read buf ~off ~len =
+    Fmt.epr ">>> ON READ (%d byte(s))\n%!" len ;
+    match !state with
+    | Partial { continue; committed; } ->
+      Ke.Rke.Weighted.N.shift_exn ke committed ;
+      ( match Ke.Rke.Weighted.N.push ke ~blit:blit ~length:Bigstringaf.length ~off ~len buf with
+        | Some _ ->
+          Ke.Rke.Weighted.compress ke ;
+          let[@warning "-8"] [ buf ] = Ke.Rke.Weighted.N.peek ke in
+          state := continue buf ~off:0 ~len:(Bigstringaf.length buf) Incomplete ;
+          Body.schedule_read body ~on_eof ~on_read
+        | None ->
+          Fmt.epr "[%a] POST buffer is full.\n%!" Fmt.(styled `Red string) "ERROR" ;
+          Lwt.wakeup wt () )
+    | Fail _ -> Lwt.wakeup wt ()
+    | Done (_, v) -> tree := Some v ; Lwt.wakeup wt () in
+  let open Lwt.Infix in
+  Body.schedule_read body ~on_eof ~on_read ; th >>= fun () ->
+  Fmt.epr ">>> DONE\n%!" ;
   Body.close_reader body ;
 
   let lst = Hashtbl.fold (fun k s a -> (k, Lwt_stream.to_list s) :: a) hashtbl [] in
-
-  let open Lwt.Infix in
   Lwt_list.map_p (fun (k, t) -> t >|= fun v -> (k, String.concat "" v)) lst
 
 type contents =
@@ -231,7 +254,7 @@ module Make
 
   let post console store remote reqd () =
     match extract_content_type (Reqd.request reqd) with
-    | None -> assert false
+    | None -> Fmt.epr "[%a]: Got an assert false.\n%!" Fmt.(styled `Red string) "ERROR" ; assert false
     | Some content_type ->
       let body = Reqd.request_body reqd in
       extract_parts content_type body >>= fun posts -> match List.assoc Paste posts, List.assoc Hl posts with
@@ -251,6 +274,7 @@ module Make
         Reqd.respond_with_string reqd response contents ;
         Lwt.return ()
       | exception Not_found ->
+        Fmt.epr "[%a] parameters not found.\n%!" Fmt.(styled `Red string) "ERROR" ;
         let contents = "Not found." in
         let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
         let response = Response.create ~headers `Not_found in
