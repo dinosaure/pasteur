@@ -160,13 +160,11 @@ module Make
       Reqd.respond_with_string reqd response contents ;
       log console "Response: 404 Not found for %a." Fmt.(Dump.list string) target
     | Some contents ->
-      let headers = Headers.of_list [ "transfer-encoding", "chunked" ] in
-      let response = Response.create ~headers `OK in
       let html = Show.html ?code:(Option.map Language.value_of_language hl) contents in
-      let body = Reqd.respond_with_streaming reqd response in
-      let ppf = formatter_of_body body in
-      Tyxml.Html.pp () ppf html ;
-      Body.close_writer body ;
+      let contents = Fmt.strf "%a" (Tyxml.Html.pp ()) html in
+      let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
+      let response = Response.create ~headers `OK in
+      Reqd.respond_with_string reqd response contents ;
       Lwt.return ()
 
   let show_raw console store remote reqd target () =
@@ -234,7 +232,7 @@ module Make
     Body.close_writer body ;
     Lwt.return ()
 
-  let load _ public reqd key () =
+  let load console public reqd key () =
     Public.get public key >>= fun contents -> match contents, Mirage_kv.Key.segments key with
     | Error _, _ -> assert false
     | Ok contents, [ "highlight.pack.js" ] ->
@@ -243,16 +241,15 @@ module Make
           ; "content-type", "text/javascript" ] in
       let response = Response.create ~headers `OK in
       Reqd.respond_with_string reqd response contents ;
-      Lwt.return ()
+      log console "highlight.pack.js delivered!"
     | Ok contents, [ "pastisserie.css" ] ->
       let headers = Headers.of_list
           [ "content-length", string_of_int (String.length contents)
           ; "content-type", "text/css" ] in
       let response = Response.create ~headers `OK in
       Reqd.respond_with_string reqd response contents ;
-      Lwt.return ()
+      log console "pastisserie.css delivered!"
     | Ok contents, _ ->
->>>>>>> master
       let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
       let response = Response.create ~headers `OK in
       Reqd.respond_with_string reqd response contents ;
