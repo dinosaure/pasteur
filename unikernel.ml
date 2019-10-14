@@ -1,12 +1,16 @@
 open Lwt.Infix
 open Httpaf
 
-module Checkseum = Checkseum
-module Digestif = Digestif
-
 module Option = struct
   let bind a f = match a with Some a -> f a | None -> None
+  let map f = function Some x -> Some (f x) | None -> None
   let ( >>= ) = bind
+end
+
+module List = struct
+  include List
+
+  let hd_opt = function x :: _ -> Some x | [] -> None
 end
 
 let formatter_of_body body =
@@ -16,7 +20,7 @@ let formatter_of_body body =
 
 let parse_content_type v =
   let open Angstrom in
-  parse_string Multipart_form.(Rfc2045.content <* Rfc822.crlf) (v ^"\r\n")
+  parse_string Multipart_form.(Rfc2045.content <* Rfc822.crlf) (v ^ "\r\n")
 
 let extract_content_type request =
   let exception Found in
@@ -62,6 +66,7 @@ let string_of_key = function
   | Raw -> "raw" | Hl -> "hl"
 
 let pp_string ppf x = Fmt.pf ppf "%S" x
+let blit src src_off dst dst_off len = Bigstringaf.blit src ~src_off dst ~dst_off ~len
 
 let extract_parts content_type body =
   let open Angstrom.Unbuffered in
@@ -73,51 +78,45 @@ let extract_parts content_type body =
       Hashtbl.add hashtbl key stream ; push, Some key
     | None -> (fun _ -> ()), None in
   let state = ref (parse (Multipart_form.parser ~emitters content_type)) in
+  let th, wt = Lwt.task () in
+  let rb = Bigstringaf.create 4096 in
+  let ke = Ke.Rke.Weighted.from rb in
   let tree = ref None in
-  let on_eof () = match !state with
-    | Partial { continue; _ } ->
-      state := continue Bigstringaf.empty ~off:0 ~len:0 Complete
-    | Fail _ -> assert false
-    | Done (_, v) -> tree := Some v in
-  let on_read buf ~off ~len = match !state with
-    | Partial { continue; _ } ->
-      state := continue buf ~off ~len Incomplete
-    | Fail _ -> assert false
-    | Done (_, v) -> tree := Some v in
-  Body.schedule_read body ~on_eof ~on_read ;
+  let rec on_eof () =
+    match !state with
+    | Partial { continue; committed; } ->
+      Ke.Rke.Weighted.N.shift_exn ke committed ;
+      Ke.Rke.Weighted.compress ke ;
+      ( match Ke.Rke.Weighted.N.peek ke with
+        | [] -> state := continue rb ~off:0 ~len:0 Complete
+        | [ buf ] -> state := continue buf ~off:0 ~len:(Bigstringaf.length buf) Complete
+        | _ -> assert false ) ;
+      on_eof ()
+    | Fail _ -> Lwt.wakeup wt ()
+    | Done (_, v) -> tree := Some v ; Lwt.wakeup wt ()
+  and on_read buf ~off ~len =
+    match !state with
+    | Partial { continue; committed; } ->
+      Ke.Rke.Weighted.N.shift_exn ke committed ;
+      let len' = min (Ke.Rke.Weighted.available ke) len in
+      if len' = 0 then Fmt.invalid_arg "POST buffer is full!" ;
+      ( match Ke.Rke.Weighted.N.push ke ~blit:blit ~length:Bigstringaf.length ~off ~len:len' buf with
+        | Some _ ->
+          if committed = 0 then Ke.Rke.Weighted.compress ke ;
+          let[@warning "-8"] slice :: _ = Ke.Rke.Weighted.N.peek ke in
+          state := continue slice ~off:0 ~len:(Bigstringaf.length slice) Incomplete ;
+          if len' - len = 0
+          then Body.schedule_read body ~on_eof ~on_read
+          else on_read buf ~off:(off + len') ~len:(len - len')
+        | None -> Lwt.wakeup wt () )
+    | Fail _ -> Lwt.wakeup wt ()
+    | Done (_, v) -> tree := Some v ; Lwt.wakeup wt () in
+  let open Lwt.Infix in
+  Body.schedule_read body ~on_eof ~on_read ; th >>= fun () ->
   Body.close_reader body ;
 
   let lst = Hashtbl.fold (fun k s a -> (k, Lwt_stream.to_list s) :: a) hashtbl [] in
-
-  let open Lwt.Infix in
   Lwt_list.map_p (fun (k, t) -> t >|= fun v -> (k, String.concat "" v)) lst
-
-type contents =
-  { contents : string
-  ; hl : Language.t
-  ; with_ln : bool
-  ; raw : bool
-  ; author : string option
-  ; comment : string option }
-and code = Language.t
-
-let contents =
-  let open Irmin.Type in
-  record "contents" (fun contents hl with_ln raw author comment -> { contents; hl; with_ln; raw; author; comment; })
-  |+ field "contents" string (fun t -> t.contents)
-  |+ field "hl" Language.witness (fun t -> t.hl)
-  |+ field "with_ln" bool (fun t -> t.with_ln)
-  |+ field "raw" bool (fun t -> t.raw)
-  |+ field "author" (option string) (fun t -> t.author)
-  |+ field "comment" (option string) (fun t -> t.comment)
-  |> sealr
-
-module T = struct
-  type t = contents
-
-  let t = contents
-  let merge = Irmin.Merge.(option (default contents))
-end
 
 module Make
     (Random : Mirage_types_lwt.RANDOM)
@@ -128,7 +127,7 @@ module Make
     (Conduit : Conduit_mirage.S)
     (HTTP : Httpaf_mirage.Server_intf)
 = struct
-  module Store = Irmin_mirage_git.Mem.KV(T)
+  module Store = Irmin_mirage_git.Mem.KV(Irmin.Contents.String)
   module Sync = Irmin.Sync(Store)
 
   let log console fmt = Fmt.kstrf (Console.log console) fmt
@@ -147,47 +146,82 @@ module Make
       | Ok `Empty | Ok (`Head _) ->
         log console "Synchronization done." >>= fun () ->
         Store.find repository key
-      | Error (`Msg err) -> invalid_arg err
-      | Error (`Conflict err) -> invalid_arg err
+      | Error (`Msg err) -> failwith err
+      | Error (`Conflict err) -> Fmt.failwith "Conflict! [%s]" err
 
-  let show console store remote reqd target () =
+  let show ?(ln= false) ?hl console store remote reqd target () =
     let open Httpaf in
     log console "Want to access to: %a." Fmt.(Dump.list string) target >>= fun () ->
     load console store remote target >>= function
     | None ->
-      let contents = "Not found." in
+      let contents = Fmt.strf "%s Not found." (String.concat "/" target) in
       let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
       let response = Response.create ~headers `Not_found in
       Reqd.respond_with_string reqd response contents ;
-      log console "Response: 404 Not found."
-    | Some { contents; hl; _ } ->
+      log console "Response: 404 Not found for %a." Fmt.(Dump.list string) target
+    | Some contents ->
       let headers = Headers.of_list [ "transfer-encoding", "chunked" ] in
       let response = Response.create ~headers `OK in
-      let html = Show.html ~code:(Language.value_of_language hl) contents in
+      let html = Show.html ?code:(Option.map Language.value_of_language hl) contents in
       let body = Reqd.respond_with_streaming reqd response in
       let ppf = formatter_of_body body in
       Tyxml.Html.pp () ppf html ;
       Body.close_writer body ;
       Lwt.return ()
 
-  type dispatch = INDEX | GET of string list | CONTENTS of Public.key | POST
+  let show_raw console store remote reqd target () =
+    let open Httpaf in
+    log console "Want to access to: %a (raw)." Fmt.(Dump.list string) target >>= fun () ->
+    load console store remote target >>= function
+    | None ->
+      let contents = Fmt.strf "%s Not found." (String.concat "/" target) in
+      let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
+      let response = Response.create ~headers `Not_found in
+      Reqd.respond_with_string reqd response contents ;
+      log console "Response: 404 Not found for %a." Fmt.(Dump.list string) target
+    | Some contents ->
+      let headers = Headers.of_list [ "content-type", "text/plain; charset=utf-8"
+                                    ; "content-length", string_of_int (String.length contents) ] in
+      let response = Response.create ~headers `OK in
+      Reqd.respond_with_string reqd response contents ;
+      Lwt.return ()
+
+  type dispatch =
+    | INDEX
+    | GET of { target : string list
+             ; ln : bool
+             ; hl : Language.t option
+             ; raw : bool }
+    | CONTENTS of Public.key
+    | POST
 
   let dispatch public reqd =
     let request = Reqd.request reqd in
-    let target = Astring.String.trim ~drop:(Char.equal '/') request.Request.target in
+    let target = Uri.of_string request.Request.target in
+    let queries = Uri.query target in
+    let target = Astring.String.trim ~drop:(Char.equal '/') (Uri.path target) in
     let target = Astring.String.cuts ~sep: "/" target in
 
     let key = Mirage_kv.Key.v request.Request.target in
     Public.exists public key >>= function
     | Error err -> Fmt.invalid_arg "%a" Public.pp_error err
-    | Ok (Some `Value) -> Lwt.return (CONTENTS key)
+    | Ok (Some `Value) ->
+      Lwt.return (CONTENTS key)
     | Ok (Some `Dictionary) | Ok None ->
       match target with
       | [] | [ "" ]->
         if request.Request.meth = `POST
         then Lwt.return POST
         else Lwt.return INDEX
-      | _ :: _ -> Lwt.return (GET target)
+      | _ :: _ ->
+        let ln = match List.assoc_opt "ln" queries with
+          | Some [ "true" ] -> true
+          | Some _ | None -> false in
+        let hl = let open Option in List.assoc_opt "hl" queries >>= List.hd_opt >>= Language.language_of_value_opt in
+        let raw = match List.assoc_opt "raw" queries with
+          | Some [ "true" ] -> true
+          | Some _ | None -> false in
+        Lwt.return (GET { target; ln; hl; raw; })
 
   let index _ reqd () =
     let headers = Headers.of_list [ "transfer-encoding", "chunked" ] in
@@ -201,77 +235,102 @@ module Make
     Lwt.return ()
 
   let load _ public reqd key () =
-    Public.get public key >>= function
-    | Error _ -> assert false
-    | Ok contents ->
+    Public.get public key >>= fun contents -> match contents, Mirage_kv.Key.segments key with
+    | Error _, _ -> assert false
+    | Ok contents, [ "highlight.pack.js" ] ->
+      let headers = Headers.of_list
+          [ "content-length", string_of_int (String.length contents)
+          ; "content-type", "text/javascript" ] in
+      let response = Response.create ~headers `OK in
+      Reqd.respond_with_string reqd response contents ;
+      Lwt.return ()
+    | Ok contents, [ "pastisserie.css" ] ->
+      let headers = Headers.of_list
+          [ "content-length", string_of_int (String.length contents)
+          ; "content-type", "text/css" ] in
+      let response = Response.create ~headers `OK in
+      Reqd.respond_with_string reqd response contents ;
+      Lwt.return ()
+    | Ok contents, _ ->
+>>>>>>> master
       let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
       let response = Response.create ~headers `OK in
       Reqd.respond_with_string reqd response contents ;
       Lwt.return ()
 
   let push console store remote ?(author= "pasteur") key value =
-    log console "<<< %a." Store.Status.pp (Store.status store) >>= fun () ->
+    log console "<<< store:%a." Store.Status.pp (Store.status store) >>= fun () ->
     let commit0 = match Store.status store with
       | `Branch branch ->
         Store.Branch.get (Store.repo store) branch
       | `Commit commit -> Lwt.return commit
-      | `Empty -> invalid_arg "Empty repository" in
+      | `Empty -> failwith "Empty repository" in
     commit0 >>= fun commit0 ->
     let _, date = Clock.now_d_ps () in
     let info () = Irmin.Info.v ~date ~author (String.concat "/" key) in
     Store.set ~parents:[ commit0 ] ~info store key value >>= function
-    | Error (`Conflict c) -> Fmt.invalid_arg "Conflict! [%s]" c
-    | Error (`Test_was _) | Error (`Too_many_retries _) -> invalid_arg "Error to update local repository!"
+    | Error (`Conflict c) -> Fmt.failwith "Conflict! [%s]" c
+    | Error (`Test_was _) | Error (`Too_many_retries _) -> failwith "Error to update local repository!"
     | Ok () -> Sync.push store remote >>= function
-      | Ok `Empty -> Fmt.invalid_arg "Got an empty repository"
+      | Ok `Empty -> Fmt.failwith "Got an empty repository"
       | Ok (`Head commit1) ->
-        log console ">>> %a -> %a." Store.Commit.pp_hash commit0 Store.Commit.pp_hash commit1
-      | Error `Detached_head -> invalid_arg "Detached head!"
-      | Error (`Msg err) -> invalid_arg err
+        log console ">>> commit:%a -> commit:%a." Store.Commit.pp_hash commit0 Store.Commit.pp_hash commit1
+      | Error `Detached_head -> failwith "Detached head!"
+      | Error (`Msg err) -> failwith err
 
-  let post console store remote reqd () =
+  let post random console store remote reqd () =
     match extract_content_type (Reqd.request reqd) with
-    | None -> assert false
+    | None -> assert false (* TODO: redirect to INDEX. *)
     | Some content_type ->
       let body = Reqd.request_body reqd in
-      extract_parts content_type body >>= fun posts -> match List.assoc Paste posts, List.assoc Hl posts with
+      extract_parts content_type body >>= fun posts ->
+      match List.assoc Paste posts, List.assoc Hl posts with
       | contents, hl ->
-        let random = Cstruct.to_string (Random.generate 16) in
-        let uuid = Uuidm.v4 (Bytes.of_string random) in
-        let hl = Language.language_of_value hl in
+        let random = random () in
+        let hl = Language.language_of_value_exn hl in
         let author = List.assoc_opt User posts in
-        let comment = List.assoc_opt Comment posts in
-        let with_ln = List.exists (function (Ln, _) -> true | _ -> false) posts in
+        let ln = List.exists (function (Ln, _) -> true | _ -> false) posts in
         let raw = List.exists (function (Raw, _) -> true | _ -> false) posts in
-        let value = { contents; hl; with_ln; raw; author; comment; } in
-        let key = Uuidm.to_string uuid in
-        push console store remote ?author [ key ] value >>= fun () ->
-        let headers = Headers.of_list [ "location", key; "content-length", "0" ] in
+        push console store remote ?author [ random ] contents >>= fun () ->
+        let uri = Uri.make
+            ~path:random
+            ~query:[ "ln", [ string_of_bool ln ]
+                   ; "hl", [ Language.value_of_language hl ]
+                   ; "raw", [ string_of_bool raw ] ]
+            () in
+        let headers = Headers.of_list [ "location", Uri.to_string uri
+                                      ; "content-length", "0" ] in
         let response = Response.create ~headers `Found in
         Reqd.respond_with_string reqd response contents ;
         Lwt.return ()
       | exception Not_found ->
-        let contents = "Not found." in
+        let contents = "Bad POST request." in
         let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
         let response = Response.create ~headers `Not_found in
         Reqd.respond_with_string reqd response contents ;
         Lwt.return ()
 
-  let main console public store remote reqd = function
+  let main random console public store remote reqd = function
     | INDEX ->
       log console "> dispatch index." >>= index console reqd
-    | GET target ->
-      log console "> dispatch get:%a." Fmt.(Dump.list string) target >>= show console store remote reqd target
+    | GET { target; ln; hl; raw= false; } ->
+      log console "> dispatch get:%a." Fmt.(Dump.list string) target
+      >>= show ~ln ?hl console store remote reqd target
+    | GET { target; raw= true; } ->
+      log console "> dispatch raw:%a." Fmt.(Dump.list string) target
+      >>= show_raw console store remote reqd target
     | CONTENTS key ->
-      log console "> dispatch contents:%a." Mirage_kv.Key.pp key >>= load console public reqd key
+      log console "> dispatch contents:%a." Mirage_kv.Key.pp key
+      >>= load console public reqd key
     | POST ->
-      log console "> dispatch post." >>= post console store remote reqd
+      log console "> dispatch post."
+      >>= post random console store remote reqd
 
-  let request_handler console public store remote reqd =
+  let request_handler random console public store remote reqd =
     let open Httpaf in
     let res =
       Lwt.catch
-        (fun () -> dispatch public reqd >>= main console public store remote reqd)
+        (fun () -> dispatch public reqd >>= main random console public store remote reqd)
         (fun exn ->
            let res = Printexc.to_string exn in
            log console "Got an error: %s." res >>= fun () ->
@@ -282,17 +341,31 @@ module Make
 
   let error_handler ?request:_ _ _ = ()
 
-  let start _ console () public resolver conduit http =
+  let fold_left ~f a s =
+    let a = ref a in
+    for i = 0 to String.length s - 1 do a := f !a s.[i] done ; !a
+
+  let random_bytes ?g len () =
+    let res = Bytes.create len in
+    let pos = ref 0 in
+    while !pos < len do
+      let raw = Cstruct.to_string (Random.generate ?g 1024) in
+      let safe = fold_left ~f:(fun a -> function 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' as chr -> chr :: a | _ -> a) [] raw in
+      List.iter (fun chr -> if !pos < len then ( Bytes.set res !pos chr ; incr pos )) safe
+    done ; Bytes.unsafe_to_string res
+
+  let start _ console _ public resolver conduit http =
+    let random = random_bytes (Key_gen.random_length ()) in
     connect resolver conduit >>= fun (store, remote) ->
     Sync.pull store remote `Set >>= function
     | Ok `Empty -> failwith "Empty remote repository"
     | Ok (`Head _) ->
       let server = HTTP.create_connection_handler
-          ~request_handler:(request_handler console public store remote)
+          ~request_handler:(request_handler random console public store remote)
           ~error_handler
           ?config:None in
 
-      http (`TCP 4343) server
-    | Error (`Msg err) -> invalid_arg err
-    | Error (`Conflict err) -> invalid_arg err
+      http (`TCP (Key_gen.port ())) server
+    | Error (`Msg err) -> failwith err
+    | Error (`Conflict err) -> failwith err
 end
