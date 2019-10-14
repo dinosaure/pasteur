@@ -243,15 +243,18 @@ module Make
       let max = String.length contents in
       let pos = ref 0 in
       let headers = Headers.of_list
-          [ "content-length", string_of_int max 
+          [ "transfer-encoding", "chunked"
           ; "content-type", "text/javascript"
           ; "connection", "close" ] in
       let response = Response.create ~headers `OK in
       let body = Reqd.respond_with_streaming reqd response in
       let rec write () =
         let len = min (max - !pos) 4096 in
-        if len = 0 then Body.close_writer body
-        else ( Body.write_string body ~off:!pos ~len contents
+        if len = 0
+        then ( Body.write_string body "0\r\n\r\n" ; Body.close_writer body )
+        else ( Body.write_string body (Fmt.strf "%X\r\n" len)
+             ; Body.write_string body ~off:!pos ~len contents
+             ; Body.write_string body "\r\n"
              ; pos := !pos + len
              ; Body.flush body write ) in
       write () ; log console "highlight.pack.js delivered!"
