@@ -157,7 +157,7 @@ let string_of_language = function
   | `Verilog       -> "Verilog"
   | `x86           -> "x86"
 
-let language_of_value = function
+let language_of_value_exn = function
   | "abnf" -> `ABNF
   | "arm" -> `ARM_assembler
   | "apache" -> `Apache
@@ -210,6 +210,9 @@ let language_of_value = function
   | "verilog" -> `Verilog
   | "x86asm" -> `x86
   | _ -> invalid_arg "invalid language"
+
+let language_of_value_opt x =
+  try Some (language_of_value_exn x) with _ -> None
 
 let value_of_language = function
   | `ABNF -> "abnf"
