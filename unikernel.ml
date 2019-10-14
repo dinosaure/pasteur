@@ -77,29 +77,30 @@ let extract_parts content_type body =
       let stream, push = Lwt_stream.create () in
       Hashtbl.add hashtbl key stream ; push, Some key
     | None -> (fun _ -> ()), None in
+
+  let thread, finished = Lwt.task () in
   let state = ref (parse (Multipart_form.parser ~emitters content_type)) in
-  let th, wt = Lwt.task () in
   let rb = Bigstringaf.create 4096 in
   let ke = Ke.Rke.Weighted.from rb in
-  let tree = ref None in
+
   let rec on_eof () =
     match !state with
     | Partial { continue; committed; } ->
       Ke.Rke.Weighted.N.shift_exn ke committed ;
-      Ke.Rke.Weighted.compress ke ;
+      if committed = 0 then Ke.Rke.Weighted.compress ke ;
       ( match Ke.Rke.Weighted.N.peek ke with
         | [] -> state := continue rb ~off:0 ~len:0 Complete
-        | [ buf ] -> state := continue buf ~off:0 ~len:(Bigstringaf.length buf) Complete
-        | _ -> assert false ) ;
+        | [ slice ] -> state := continue slice ~off:0 ~len:(Bigstringaf.length slice) Complete
+        | slice :: _ -> state := continue slice ~off:0 ~len:(Bigstringaf.length slice) Complete ) ;
       on_eof ()
-    | Fail _ -> Lwt.wakeup wt ()
-    | Done (_, v) -> tree := Some v ; Lwt.wakeup wt ()
+    | Fail _ -> Lwt.wakeup finished (Rresult.R.error_msgf "bad POST request")
+    | Done (_, v) -> Lwt.wakeup finished (Rresult.R.ok v)
   and on_read buf ~off ~len =
     match !state with
     | Partial { continue; committed; } ->
       Ke.Rke.Weighted.N.shift_exn ke committed ;
       let len' = min (Ke.Rke.Weighted.available ke) len in
-      if len' = 0 then Fmt.invalid_arg "POST buffer is full!" ;
+      if len' = 0 then Lwt.wakeup finished (Rresult.R.error_msgf "POST buffer is full!") ;
       ( match Ke.Rke.Weighted.N.push ke ~blit:blit ~length:Bigstringaf.length ~off ~len:len' buf with
         | Some _ ->
           if committed = 0 then Ke.Rke.Weighted.compress ke ;
@@ -108,15 +109,16 @@ let extract_parts content_type body =
           if len' - len = 0
           then Body.schedule_read body ~on_eof ~on_read
           else on_read buf ~off:(off + len') ~len:(len - len')
-        | None -> Lwt.wakeup wt () )
-    | Fail _ -> Lwt.wakeup wt ()
-    | Done (_, v) -> tree := Some v ; Lwt.wakeup wt () in
+        | None -> Lwt.wakeup finished (Rresult.R.error_msgf "POST buffer is full!") )
+    | Fail _ -> Lwt.wakeup finished (Rresult.R.error_msgf "bad POST request")
+    | Done (_, v) -> Lwt.wakeup finished (Rresult.R.ok v) in
   let open Lwt.Infix in
-  Body.schedule_read body ~on_eof ~on_read ; th >>= fun () ->
-  Body.close_reader body ;
-
-  let lst = Hashtbl.fold (fun k s a -> (k, Lwt_stream.to_list s) :: a) hashtbl [] in
-  Lwt_list.map_p (fun (k, t) -> t >|= fun v -> (k, String.concat "" v)) lst
+  Body.schedule_read body ~on_eof ~on_read ;
+  thread >>= function
+  | Error _ as err -> Lwt.return err
+  | Ok _ ->
+    let lst = Hashtbl.fold (fun k s a -> (k, Lwt_stream.to_list s) :: a) hashtbl [] in
+    Lwt_list.map_p (fun (k, t) -> t >|= fun v -> (k, String.concat "" v)) lst >|= Rresult.R.ok
 
 module Make
     (Random : Mirage_types_lwt.RANDOM)
@@ -149,20 +151,21 @@ module Make
       | Error (`Msg err) -> failwith err
       | Error (`Conflict err) -> Fmt.failwith "Conflict! [%s]" err
 
-  let show ?(ln= false) ?hl console store remote reqd target () =
+  let show ?(ln:_= false) ?hl console store remote reqd target () =
     let open Httpaf in
     log console "Want to access to: %a." Fmt.(Dump.list string) target >>= fun () ->
     load console store remote target >>= function
     | None ->
       let contents = Fmt.strf "%s Not found." (String.concat "/" target) in
-      let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
+      let headers = Headers.of_list [ "connection", "close" ] in
       let response = Response.create ~headers `Not_found in
       Reqd.respond_with_string reqd response contents ;
       log console "Response: 404 Not found for %a." Fmt.(Dump.list string) target
     | Some contents ->
       let html = Show.html ?code:(Option.map Language.value_of_language hl) contents in
-      let contents = Fmt.strf "%a" (Tyxml.Html.pp ()) html in
-      let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
+      let contents = Fmt.strf "%a%!" (Tyxml.Html.pp ()) html in
+      let headers = Headers.of_list [ "content-type", "text/html"
+                                    ; "content-length", string_of_int (String.length contents) ] in
       let response = Response.create ~headers `OK in
       Reqd.respond_with_string reqd response contents ;
       Lwt.return ()
@@ -173,7 +176,7 @@ module Make
     load console store remote target >>= function
     | None ->
       let contents = Fmt.strf "%s Not found." (String.concat "/" target) in
-      let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
+      let headers = Headers.of_list [ "connection", "close" ] in
       let response = Response.create ~headers `Not_found in
       Reqd.respond_with_string reqd response contents ;
       log console "Response: 404 Not found for %a." Fmt.(Dump.list string) target
@@ -221,27 +224,36 @@ module Make
           | Some _ | None -> false in
         Lwt.return (GET { target; ln; hl; raw; })
 
-  let index _ reqd () =
-    let headers = Headers.of_list [ "transfer-encoding", "chunked" ] in
-    let response = Response.create ~headers `OK in
+  let index_contents =
     let languages = List.map (fun c -> Language.string_of_language c, Language.value_of_language c) Language.all in
     let html = Form.html ~title:"Past-isserie" ~documentation:"Pasteur" languages in
-    let body = Reqd.respond_with_streaming reqd response in
-    let ppf = formatter_of_body body in
-    Tyxml.Html.pp () ppf html ;
-    Body.close_writer body ;
+    Fmt.strf "%a%!" (Tyxml.Html.pp ()) html
+
+  let index _ reqd () =
+    let headers = Headers.of_list [ "content-type", "text/html; charset=utf-8"
+                                  ; "content-length", string_of_int (String.length index_contents) ] in
+    let response = Response.create ~headers `OK in
+    Reqd.respond_with_string reqd response index_contents ;
     Lwt.return ()
 
   let load console public reqd key () =
     Public.get public key >>= fun contents -> match contents, Mirage_kv.Key.segments key with
     | Error _, _ -> assert false
     | Ok contents, [ "highlight.pack.js" ] ->
+      let max = String.length contents in
+      let pos = ref 0 in
       let headers = Headers.of_list
-          [ "content-length", string_of_int (String.length contents)
+          [ "content-length", string_of_int max 
           ; "content-type", "text/javascript" ] in
       let response = Response.create ~headers `OK in
-      Reqd.respond_with_string reqd response contents ;
-      log console "highlight.pack.js delivered!"
+      let body = Reqd.respond_with_streaming reqd response in
+      let rec write () =
+        let len = min (max - !pos) 4096 in
+        if len = 0 then Body.close_writer body
+        else ( Body.write_string body ~off:!pos ~len contents
+             ; pos := !pos + len
+             ; Body.flush body write ) in
+      write () ; log console "highlight.pack.js delivered!"
     | Ok contents, [ "pastisserie.css" ] ->
       let headers = Headers.of_list
           [ "content-length", string_of_int (String.length contents)
@@ -280,32 +292,33 @@ module Make
     | None -> assert false (* TODO: redirect to INDEX. *)
     | Some content_type ->
       let body = Reqd.request_body reqd in
-      extract_parts content_type body >>= fun posts ->
-      match List.assoc Paste posts, List.assoc Hl posts with
-      | contents, hl ->
-        let random = random () in
-        let hl = Language.language_of_value_exn hl in
-        let author = List.assoc_opt User posts in
-        let ln = List.exists (function (Ln, _) -> true | _ -> false) posts in
-        let raw = List.exists (function (Raw, _) -> true | _ -> false) posts in
-        push console store remote ?author [ random ] contents >>= fun () ->
-        let uri = Uri.make
-            ~path:random
-            ~query:[ "ln", [ string_of_bool ln ]
-                   ; "hl", [ Language.value_of_language hl ]
-                   ; "raw", [ string_of_bool raw ] ]
-            () in
-        let headers = Headers.of_list [ "location", Uri.to_string uri
-                                      ; "content-length", "0" ] in
-        let response = Response.create ~headers `Found in
-        Reqd.respond_with_string reqd response contents ;
-        Lwt.return ()
-      | exception Not_found ->
-        let contents = "Bad POST request." in
-        let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
-        let response = Response.create ~headers `Not_found in
-        Reqd.respond_with_string reqd response contents ;
-        Lwt.return ()
+      extract_parts content_type body >>= function
+      | Error _ as err -> Rresult.R.failwith_error_msg err
+      | Ok posts -> match List.assoc Paste posts, List.assoc Hl posts with
+        | contents, hl ->
+          let random = random () in
+          let hl = Language.language_of_value_exn hl in
+          let author = List.assoc_opt User posts in
+          let ln = List.exists (function (Ln, _) -> true | _ -> false) posts in
+          let raw = List.exists (function (Raw, _) -> true | _ -> false) posts in
+          push console store remote ?author [ random ] contents >>= fun () ->
+          let uri = Uri.make
+              ~path:random
+              ~query:[ "ln", [ string_of_bool ln ]
+                     ; "hl", [ Language.value_of_language hl ]
+                     ; "raw", [ string_of_bool raw ] ]
+              () in
+          let headers = Headers.of_list [ "location", Uri.to_string uri
+                                        ; "connection", "close" ] in
+          let response = Response.create ~headers `Found in
+          Reqd.respond_with_string reqd response contents ;
+          Lwt.return ()
+        | exception Not_found ->
+          let contents = "Bad POST request." in
+          let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
+          let response = Response.create ~headers `Not_found in
+          Reqd.respond_with_string reqd response contents ;
+          Lwt.return ()
 
   let main random console public store remote reqd = function
     | INDEX ->
@@ -313,7 +326,7 @@ module Make
     | GET { target; ln; hl; raw= false; } ->
       log console "> dispatch get:%a." Fmt.(Dump.list string) target
       >>= show ~ln ?hl console store remote reqd target
-    | GET { target; raw= true; } ->
+    | GET { target; raw= true; _ } ->
       log console "> dispatch raw:%a." Fmt.(Dump.list string) target
       >>= show_raw console store remote reqd target
     | CONTENTS key ->
