@@ -244,7 +244,8 @@ module Make
       let pos = ref 0 in
       let headers = Headers.of_list
           [ "content-length", string_of_int max 
-          ; "content-type", "text/javascript" ] in
+          ; "content-type", "text/javascript"
+          ; "connection", "close" ] in
       let response = Response.create ~headers `OK in
       let body = Reqd.respond_with_streaming reqd response in
       let rec write () =
