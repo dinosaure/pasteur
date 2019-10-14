@@ -17,14 +17,14 @@ MirageOS let user to choose which backend he wants. So we have 3 generals backen
 - Unix
 - Xen
 
-Currently, the project is tested with the Unix backend - the most easy to deploy.
+Currently, the project is tested with the Unix backend - the most easy to deploy - and Solo5.
 
 ### Unix backend
 
 First, you need to have the MirageOS tool:
 
 ```sh
-$ opam install mirage
+$ opam install mirage checkseum.0.0.9 digestif.0.7.4
 ```
 
 Then, under the repository:
@@ -68,6 +68,51 @@ $ ./main.native
 ```
 
 It listens into 4343, so you can open `http://127.0.0.1:4343` and see your Git repository feeded.
+
+### Solo5 backend
+
+A Solo5 backend of `pasteur` is possible with `mirage configure -t hvt`. However, you need to precise:
+- IPv4 of your unikernel
+- Gateway
+- Git remote repository according your network topology
+
+Imagine a bridge interface `br1` mounted to `10.0.0.1`, a possible configuration is to make
+a TAP interface, to bridge it with `br1` and configure `pasteur` with:
+
+```sh
+$ mirage configure -t hvt --ipv4=10.0.0.3/24 --ipv4-gateway=10.0.0.1 -r git://10.0.0.1/pasteur
+```
+
+About the Git daemon, it should listen 10.0.0.1 with `--listen 10.0.0.1` and you can run the
+unikernel with (Solo5 0.6.0):
+
+```sh
+$ solo5-hvt --net:service=tap100 pasteur.hvt
+```
+
+### Dunification
+
+`duniverse` branch is a special branch which provides an unikernel and let us to compile it with `dune`
+instead `ocamlbuild`. The way to get the unikernel is slightly complexe:
+
+```sh
+$ opam pin add dune-private-libs https://github.com/ocaml/dune
+$ opam pin add dune-configurator https://github.com/ocaml/dune
+$ opam pin add dune --dev
+$ opam pin add duniverse https://github.com/avsm/duniverse
+$ opam remove add mirage https://github.com/dinosaure/opam-overlays.git#mirage-from-dinosaure
+$ opam install mirage
+```
+
+We currently need last version of `dune`, then we can compile `pasteur` with:
+
+```sh
+$ mirage configure -t hvt --ipv4=...
+$ duniverse init --opam-remote=https://github.com/dinosaure/opam-overlays.git#mirage-from-dinosaure
+$ duniverse opam-install
+$ duniverse pull
+$ mirage build
+```
 
 [http-af]: https://github.com/inhabitedtype/httpaf
 [ocaml-git]: https://github.com/mirage/ocaml-git
