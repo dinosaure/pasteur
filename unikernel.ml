@@ -1,13 +1,16 @@
 open Lwt.Infix
 open Httpaf
 
-module Checkseum = Checkseum
-module Digestif = Digestif
-
 module Option = struct
   let bind a f = match a with Some a -> f a | None -> None
   let map f = function Some x -> Some (f x) | None -> None
   let ( >>= ) = bind
+end
+
+module List = struct
+  include List
+
+  let hd_opt = function x :: _ -> Some x | [] -> None
 end
 
 let formatter_of_body body =
@@ -17,7 +20,7 @@ let formatter_of_body body =
 
 let parse_content_type v =
   let open Angstrom in
-  parse_string Multipart_form.(Rfc2045.content <* Rfc822.crlf) (v ^"\r\n")
+  parse_string Multipart_form.(Rfc2045.content <* Rfc822.crlf) (v ^ "\r\n")
 
 let extract_content_type request =
   let exception Found in
@@ -143,19 +146,19 @@ module Make
       | Ok `Empty | Ok (`Head _) ->
         log console "Synchronization done." >>= fun () ->
         Store.find repository key
-      | Error (`Msg err) -> invalid_arg err
-      | Error (`Conflict err) -> invalid_arg err
+      | Error (`Msg err) -> failwith err
+      | Error (`Conflict err) -> Fmt.failwith "Conflict! [%s]" err
 
   let show ?(ln= false) ?hl console store remote reqd target () =
     let open Httpaf in
     log console "Want to access to: %a." Fmt.(Dump.list string) target >>= fun () ->
     load console store remote target >>= function
     | None ->
-      let contents = "Not found." in
+      let contents = Fmt.strf "%s Not found." (String.concat "/" target) in
       let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
       let response = Response.create ~headers `Not_found in
       Reqd.respond_with_string reqd response contents ;
-      log console "Response: 404 Not found."
+      log console "Response: 404 Not found for %a." Fmt.(Dump.list string) target
     | Some contents ->
       let headers = Headers.of_list [ "transfer-encoding", "chunked" ] in
       let response = Response.create ~headers `OK in
@@ -166,11 +169,29 @@ module Make
       Body.close_writer body ;
       Lwt.return ()
 
+  let show_raw console store remote reqd target () =
+    let open Httpaf in
+    log console "Want to access to: %a (raw)." Fmt.(Dump.list string) target >>= fun () ->
+    load console store remote target >>= function
+    | None ->
+      let contents = Fmt.strf "%s Not found." (String.concat "/" target) in
+      let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
+      let response = Response.create ~headers `Not_found in
+      Reqd.respond_with_string reqd response contents ;
+      log console "Response: 404 Not found for %a." Fmt.(Dump.list string) target
+    | Some contents ->
+      let headers = Headers.of_list [ "content-type", "text/plain; charset=utf-8"
+                                    ; "content-length", string_of_int (String.length contents) ] in
+      let response = Response.create ~headers `OK in
+      Reqd.respond_with_string reqd response contents ;
+      Lwt.return ()
+
   type dispatch =
     | INDEX
     | GET of { target : string list
              ; ln : bool
-             ; hl : Language.t option }
+             ; hl : Language.t option
+             ; raw : bool }
     | CONTENTS of Public.key
     | POST
 
@@ -196,8 +217,11 @@ module Make
         let ln = match List.assoc_opt "ln" queries with
           | Some [ "true" ] -> true
           | Some _ | None -> false in
-        let hl = let open Option in List.assoc_opt "hl" queries >>= hd_opt >>= Language.language_of_value_opt in
-        Lwt.return (GET { target; ln; hl; })
+        let hl = let open Option in List.assoc_opt "hl" queries >>= List.hd_opt >>= Language.language_of_value_opt in
+        let raw = match List.assoc_opt "raw" queries with
+          | Some [ "true" ] -> true
+          | Some _ | None -> false in
+        Lwt.return (GET { target; ln; hl; raw; })
 
   let index _ reqd () =
     let headers = Headers.of_list [ "transfer-encoding", "chunked" ] in
@@ -239,43 +263,47 @@ module Make
       | `Branch branch ->
         Store.Branch.get (Store.repo store) branch
       | `Commit commit -> Lwt.return commit
-      | `Empty -> invalid_arg "Empty repository" in
+      | `Empty -> failwith "Empty repository" in
     commit0 >>= fun commit0 ->
     let _, date = Clock.now_d_ps () in
     let info () = Irmin.Info.v ~date ~author (String.concat "/" key) in
     Store.set ~parents:[ commit0 ] ~info store key value >>= function
-    | Error (`Conflict c) -> Fmt.invalid_arg "Conflict! [%s]" c
-    | Error (`Test_was _) | Error (`Too_many_retries _) -> invalid_arg "Error to update local repository!"
+    | Error (`Conflict c) -> Fmt.failwith "Conflict! [%s]" c
+    | Error (`Test_was _) | Error (`Too_many_retries _) -> failwith "Error to update local repository!"
     | Ok () -> Sync.push store remote >>= function
-      | Ok `Empty -> Fmt.invalid_arg "Got an empty repository"
+      | Ok `Empty -> Fmt.failwith "Got an empty repository"
       | Ok (`Head commit1) ->
         log console ">>> commit:%a -> commit:%a." Store.Commit.pp_hash commit0 Store.Commit.pp_hash commit1
-      | Error `Detached_head -> invalid_arg "Detached head!"
-      | Error (`Msg err) -> invalid_arg err
+      | Error `Detached_head -> failwith "Detached head!"
+      | Error (`Msg err) -> failwith err
 
   let post random console store remote reqd () =
     match extract_content_type (Reqd.request reqd) with
     | None -> assert false (* TODO: redirect to INDEX. *)
     | Some content_type ->
       let body = Reqd.request_body reqd in
-      extract_parts content_type body >>= fun posts -> match List.assoc Paste posts, List.assoc Hl posts with
+      extract_parts content_type body >>= fun posts ->
+      match List.assoc Paste posts, List.assoc Hl posts with
       | contents, hl ->
         let random = random () in
         let hl = Language.language_of_value_exn hl in
         let author = List.assoc_opt User posts in
-        let _ = List.assoc_opt Comment posts in
         let ln = List.exists (function (Ln, _) -> true | _ -> false) posts in
-        let _ = List.exists (function (Raw, _) -> true | _ -> false) posts in
+        let raw = List.exists (function (Raw, _) -> true | _ -> false) posts in
         push console store remote ?author [ random ] contents >>= fun () ->
-        let uri = Uri.make ~path:random ~query:[ "ln", [ string_of_bool ln ]
-                                               ; "hl", [ Language.value_of_language hl ] ] () in
+        let uri = Uri.make
+            ~path:random
+            ~query:[ "ln", [ string_of_bool ln ]
+                   ; "hl", [ Language.value_of_language hl ]
+                   ; "raw", [ string_of_bool raw ] ]
+            () in
         let headers = Headers.of_list [ "location", Uri.to_string uri
                                       ; "content-length", "0" ] in
         let response = Response.create ~headers `Found in
         Reqd.respond_with_string reqd response contents ;
         Lwt.return ()
       | exception Not_found ->
-        let contents = "Not found." in
+        let contents = "Bad POST request." in
         let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
         let response = Response.create ~headers `Not_found in
         Reqd.respond_with_string reqd response contents ;
@@ -284,12 +312,18 @@ module Make
   let main random console public store remote reqd = function
     | INDEX ->
       log console "> dispatch index." >>= index console reqd
-    | GET { target; ln; hl; } ->
-      log console "> dispatch get:%a." Fmt.(Dump.list string) target >>= show ~ln ?hl console store remote reqd target
+    | GET { target; ln; hl; raw= false; } ->
+      log console "> dispatch get:%a." Fmt.(Dump.list string) target
+      >>= show ~ln ?hl console store remote reqd target
+    | GET { target; raw= true; } ->
+      log console "> dispatch raw:%a." Fmt.(Dump.list string) target
+      >>= show_raw console store remote reqd target
     | CONTENTS key ->
-      log console "> dispatch contents:%a." Mirage_kv.Key.pp key >>= load console public reqd key
+      log console "> dispatch contents:%a." Mirage_kv.Key.pp key
+      >>= load console public reqd key
     | POST ->
-      log console "> dispatch post." >>= post random console store remote reqd
+      log console "> dispatch post."
+      >>= post random console store remote reqd
 
   let request_handler random console public store remote reqd =
     let open Httpaf in
@@ -331,6 +365,6 @@ module Make
           ?config:None in
 
       http (`TCP (Key_gen.port ())) server
-    | Error (`Msg err) -> invalid_arg err
-    | Error (`Conflict err) -> invalid_arg err
+    | Error (`Msg err) -> failwith err
+    | Error (`Conflict err) -> failwith err
 end
