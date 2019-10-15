@@ -19,6 +19,11 @@ let pasteur =
     ~keys:[ Key.abstract remote; Key.abstract port; Key.abstract random_len ]
     (random @-> console @-> pclock @-> kv_ro @-> resolver @-> conduit @-> http @-> job)
 
+let pasteur =
+  foreign "Unikernel.Make"
+    ~keys:[ Key.abstract remote; Key.abstract port; Key.abstract random_len ]
+    (random @-> console @-> pclock @-> kv_ro @-> resolver @-> conduit @-> http @-> job)
+
 let stack = generic_stackv4 default_network
 let conduit = conduit_direct stack
 let resolver = resolver_dns stack
@@ -27,7 +32,7 @@ let console = console
 let public = generic_kv_ro "public"
 
 let packages =
-  let irmin_pin = "git+https://github.com/pascutto/irmin.git#git_pp" in
+  let irmin_pin = "git+https://github.com/mirage/irmin.git" in
   let git_pin = "git+https://github.com/mirage/ocaml-git.git" in
   let multipart_form = "git+https://github.com/dinosaure/multipart_form.git" in
 
@@ -41,21 +46,23 @@ let packages =
   ; package ~pin:"git+https://github.com/mirage/rosetta.git" "rosetta"
   ; package ~pin:multipart_form "multipart_form"
 
-  ; package ~min:"0.9.1" "decompress"
+  ; package ~min:"0.9.1" ~max:"1.0.0" "decompress"
   ; package ~pin:git_pin "git"
   ; package ~pin:git_pin "git-http"
   ; package ~pin:git_pin "git-mirage"
+
+  ; package ~sublibs:["c"] "checkseum" ~min:"0.0.9"
+  ; package ~sublibs:["c"] "digestif" ~min:"0.7.4"
 
   ; package ~pin:irmin_pin "irmin"
   ; package ~pin:irmin_pin "irmin-mem"
   ; package ~pin:irmin_pin "irmin-git"
   ; package ~pin:irmin_pin "irmin-mirage"
   ; package ~pin:irmin_pin "irmin-mirage-git"
+  ; package ~pin:multipart_form "multipart_form"
 
-  ; package "tyxml"
-
-  ; package ~sublibs:["c"] "checkseum" ~min:"0.1.1"
-  ; package ~sublibs:["c"] "digestif" ~min:"0.8.0" ]
+  ; package "uuidm"
+  ; package "tyxml" ]
 
 let () =
   register "pasteur"
