@@ -294,11 +294,12 @@ module Make
           let ln = List.exists (function (Ln, _) -> true | _ -> false) posts in
           let raw = List.exists (function (Raw, _) -> true | _ -> false) posts in
           push console store remote ?author [ random ] contents >>= fun () ->
+          let query = [ "hl", [ Language.value_of_language hl ] ] in
+          let query = if ln then ("ln", [ "true" ]) :: qeury else query in
+          let query = if raw then ("raw", [ "true" ]) :: query else query in
           let uri = Uri.make
               ~path:random
-              ~query:[ "ln", [ string_of_bool ln ]
-                     ; "hl", [ Language.value_of_language hl ]
-                     ; "raw", [ string_of_bool raw ] ]
+              ~query
               () in
           let headers = Headers.of_list [ "location", Uri.to_string uri
                                         ; "content-length", "0" ] in
