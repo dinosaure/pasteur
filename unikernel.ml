@@ -301,7 +301,7 @@ module Make
                      ; "raw", [ string_of_bool raw ] ]
               () in
           let headers = Headers.of_list [ "location", Uri.to_string uri
-                                        ; "connection", "close" ] in
+                                        ; "content-length", "0" ] in
           let response = Response.create ~headers `Found in
           Reqd.respond_with_string reqd response contents ;
           Lwt.return ()
