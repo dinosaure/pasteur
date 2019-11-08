@@ -19,11 +19,6 @@ let pasteur =
     ~keys:[ Key.abstract remote; Key.abstract port; Key.abstract random_len ]
     (random @-> console @-> pclock @-> kv_ro @-> resolver @-> conduit @-> http @-> job)
 
-let pasteur =
-  foreign "Unikernel.Make"
-    ~keys:[ Key.abstract remote; Key.abstract port; Key.abstract random_len ]
-    (random @-> console @-> pclock @-> kv_ro @-> resolver @-> conduit @-> http @-> job)
-
 let stack = generic_stackv4 default_network
 let conduit = conduit_direct stack
 let resolver = resolver_dns stack
