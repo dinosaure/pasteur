@@ -114,7 +114,7 @@ let extract_parts content_type body =
     | Done (_, v) -> Lwt.wakeup finished (Rresult.R.ok v) in
   let open Lwt.Infix in
   Body.schedule_read body ~on_eof ~on_read ;
-  thread >>= function
+  thread >>= fun res -> Body.close_reader body ; match res with
   | Error _ as err -> Lwt.return err
   | Ok _ ->
     let lst = Hashtbl.fold (fun k s a -> (k, Lwt_stream.to_list s) :: a) hashtbl [] in
