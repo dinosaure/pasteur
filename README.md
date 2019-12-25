@@ -1,12 +1,12 @@
 # Pasteur
 
-Pasteur is an unikernel (MirageOS) which provide an mini-website to paste
+Pasteur is an unikernel (MirageOS) which provides an mini-website to paste
 snippets and save them into a Git repository. The goal of this project is
 to be an example of: how to write an unikernel today?
 
 This example uses several stacks like the HTTP stack (with [http/af][http-af]),
-the Git stack (with [ocaml-git][ocaml-git]) with [Irmin][irmin] with underlaying
-layers - available in MirageOS organization.
+the Git stack (with [ocaml-git][ocaml-git]) with [Irmin][irmin] with underlying
+layers - available in the MirageOS organization.
 
 Design comes from [paste.isomorphis.me][paste].
 
@@ -45,14 +45,14 @@ $ cd pasteur
 $ git init --bare
 $ git read-tree --empty
 $ FIRST_COMMIT=`git commit-tree $(git write-tree) -m .`
-$ git update-ref "refs/heads/master" $FIRST_COMMIT`
+$ git update-ref "refs/heads/master" $FIRST_COMMIT
 ```
 
 Then, we can launch the Git server:
 
 ```sh
 $ cd ..
-$ git daemon --base-path=. --export-all --reuseaddr --informative-errors --verbose --enable=receive-pack 
+$ git daemon --base-path=. --export-all --reuseaddr --informative-errors --verbose --enable=receive-pack
 ```
 
 You can clone it by this way:
@@ -67,7 +67,8 @@ So we can start to launch the unikernel:
 $ ./main.native
 ```
 
-It listens into 4343, so you can open `http://127.0.0.1:4343` and see your Git repository feeded.
+It listens into 4343, so you can open `http://127.0.0.1:4343` and see your Git
+repository be fed (and updated) by the server.
 
 ### Solo5 backend
 
