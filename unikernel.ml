@@ -195,6 +195,41 @@ module Make
     | CONTENTS of Public.key
     | POST
 
+  let ln_default = false
+  let raw_default = false
+
+  (* Try to generate URIs as short as possible by taking advantage of the
+     default values for the options (ln, hl, ...). *)
+  let mk_paste_uri ~id ~ln ~hl ~raw =
+    let (@::) o ls = match o with None -> ls | Some x -> x :: ls in
+    let boolopt ~default key x =
+      if x = default then None
+      else Some (
+        (* short form for the "=true" case *)
+        if x then (key, []) else (key, ["false"])
+      ) in
+    let query =
+      (boolopt ~default:ln_default "ln" ln) @::
+      (boolopt ~default:raw_default "raw" raw) @::
+      (Option.map (fun s -> "hl", [Language.value_of_language s]) hl) @::
+      []
+    in
+    Uri.make ~path:id ~query ()
+
+  let decode_paste_uri ~target ~queries =
+    let query_bool ~default key =
+      match List.assoc_opt key queries with
+      | Some [ "true" ] | Some [] -> true
+      | Some [ "false" ] -> false
+      | _ -> default
+    in
+    let ln = query_bool ~default:ln_default "ln" in
+    let hl = let open Option in
+      List.assoc_opt "hl" queries >>= List.hd_opt >>=
+      Language.language_of_value_opt in
+    let raw = query_bool ~default:raw_default "raw" in
+    GET { target; ln; hl; raw; }
+
   let dispatch public reqd =
     let request = Reqd.request reqd in
     let target = Uri.of_string request.Request.target in
@@ -209,22 +244,19 @@ module Make
       Lwt.return (CONTENTS key)
     | Ok (Some `Dictionary) | Ok None ->
       match target with
-      | [] | [ "" ]->
+      | [] | [ "" ] ->
         if request.Request.meth = `POST
         then Lwt.return POST
         else Lwt.return INDEX
-      | _ :: _ ->
-        let ln = match List.assoc_opt "ln" queries with
-          | Some [ "true" ] -> true
-          | Some _ | None -> false in
-        let hl = let open Option in List.assoc_opt "hl" queries >>= List.hd_opt >>= Language.language_of_value_opt in
-        let raw = match List.assoc_opt "raw" queries with
-          | Some [ "true" ] -> true
-          | Some _ | None -> false in
-        Lwt.return (GET { target; ln; hl; raw; })
+      | _ :: _ -> Lwt.return (decode_paste_uri ~target ~queries)
 
   let index_contents =
-    let languages = List.map (fun c -> Language.string_of_language c, Language.value_of_language c) Language.all in
+    let languages =
+      ("No highlighting", None) ::
+      List.map (fun c ->
+        Language.string_of_language c, Some (Language.value_of_language c)
+      ) Language.all
+    in
     let html = Form.html ~title:"Past-isserie" ~documentation:"Pasteur" languages in
     Fmt.strf "%a%!" (Tyxml.Html.pp ()) html
 
@@ -288,17 +320,12 @@ module Make
       | Ok posts -> match List.assoc Paste posts, List.assoc Hl posts with
         | contents, hl ->
           let random = random () in
-          let hl = Language.language_of_value_exn hl in
+          let hl = Language.language_of_value_opt hl in
           let author = List.assoc_opt User posts in
           let ln = List.exists (function (Ln, _) -> true | _ -> false) posts in
           let raw = List.exists (function (Raw, _) -> true | _ -> false) posts in
           push console store remote ?author [ random ] contents >>= fun () ->
-          let uri = Uri.make
-              ~path:random
-              ~query:[ "ln", [ string_of_bool ln ]
-                     ; "hl", [ Language.value_of_language hl ]
-                     ; "raw", [ string_of_bool raw ] ]
-              () in
+          let uri = mk_paste_uri ~ln ~hl ~raw ~id:random in
           let headers = Headers.of_list [ "location", Uri.to_string uri
                                         ; "content-length", "0" ] in
           let response = Response.create ~headers `Found in

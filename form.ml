@@ -17,10 +17,13 @@ let options =
   [ ln; raw; br () ]
 
 let language lst =
-  let fn (name, lang) = option ~a:[ a_value lang ] (txt name) in
-  [ select ~a:[ a_name "hl" ]
-      (List.map fn lst)
-  ; br () ]
+  let lang_id_of_lang = function
+    | None -> "__no_highlighting__"
+    | Some lang -> lang in
+  let fn (name, lang) =
+    option ~a:[ a_value (lang_id_of_lang lang) ]
+      (txt name) in
+  [ select ~a:[ a_name "hl" ] (List.map fn lst); br () ]
 
 let name_field =
   [ label ~a:[ a_label_for "user" ] [ txt "User (optional):"; ]
