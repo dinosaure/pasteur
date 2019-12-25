@@ -150,7 +150,7 @@ module Make
       | Error (`Msg err) -> failwith err
       | Error (`Conflict err) -> Fmt.failwith "Conflict! [%s]" err
 
-  let show ?(ln:_= false) ?hl console store remote reqd target () =
+  let show ?ln:(_ = false) ?hl console store remote reqd target () =
     let open Httpaf in
     log console "Want to access to: %a." Fmt.(Dump.list string) target >>= fun () ->
     load console store remote target >>= function
