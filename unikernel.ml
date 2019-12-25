@@ -49,20 +49,19 @@ let name_of_fields fields =
       | _ -> () ) fields ; None
   with Found -> !name
 
-type key = Paste | User | Comment | Mldown | Ln | Raw | Hl
+type key = Paste | User | Comment | Ln | Raw | Hl
 
 let key_of_string = function
   | "paste" -> Some Paste
   | "user" -> Some User
   | "comment" -> Some Comment
-  | "mldown" -> Some Mldown
   | "ln" -> Some Ln
   | "raw" -> Some Raw
   | "hl" -> Some Hl
   | _ -> None
 
 let string_of_key = function
-  | Paste -> "paste" | User -> "user" | Comment -> "comment" | Mldown -> "mldown" | Ln -> "ln"
+  | Paste -> "paste" | User -> "user" | Comment -> "comment" | Ln -> "ln"
   | Raw -> "raw" | Hl -> "hl"
 
 let pp_string ppf x = Fmt.pf ppf "%S" x

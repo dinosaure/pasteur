@@ -8,7 +8,6 @@ let checkbox ~name ?label:(contents= [ txt name ]) ?(value= "on") ?(checked= fal
                ; a_value value ] @ checked) ()
      :: contents)
 
-let mldown_href = Xml.uri_of_string "https://gitorious.org/mldown"
 let post_href = Xml.uri_of_string "/"
 let css_href = Xml.uri_of_string "/pastisserie.css"
 
