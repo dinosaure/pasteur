@@ -8,7 +8,6 @@ let checkbox ~name ?label:(contents= [ txt name ]) ?(value= "on") ?(checked= fal
                ; a_value value ] @ checked) ()
      :: contents)
 
-let mldown_href = Xml.uri_of_string "https://gitorious.org/mldown"
 let post_href = Xml.uri_of_string "/"
 let css_href = Xml.uri_of_string "/pastisserie.css"
 
@@ -18,10 +17,13 @@ let options =
   [ ln; raw; br () ]
 
 let language lst =
-  let fn (name, lang) = option ~a:[ a_value lang ] (txt name) in
-  [ select ~a:[ a_name "hl" ]
-      (List.map fn lst)
-  ; br () ]
+  let lang_id_of_lang = function
+    | None -> "__no_highlighting__"
+    | Some lang -> lang in
+  let fn (name, lang) =
+    option ~a:[ a_value (lang_id_of_lang lang) ]
+      (txt name) in
+  [ select ~a:[ a_name "hl" ] (List.map fn lst); br () ]
 
 let name_field =
   [ label ~a:[ a_label_for "user" ] [ txt "User (optional):"; ]
