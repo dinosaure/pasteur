@@ -156,7 +156,7 @@ module Make
     load console store remote target >>= function
     | None ->
       let contents = Fmt.strf "%s Not found." (String.concat "/" target) in
-      let headers = Headers.of_list [ "connection", "close" ] in
+      let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
       let response = Response.create ~headers `Not_found in
       Reqd.respond_with_string reqd response contents ;
       log console "Response: 404 Not found for %a." Fmt.(Dump.list string) target
@@ -175,7 +175,7 @@ module Make
     load console store remote target >>= function
     | None ->
       let contents = Fmt.strf "%s Not found." (String.concat "/" target) in
-      let headers = Headers.of_list [ "connection", "close" ] in
+      let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
       let response = Response.create ~headers `Not_found in
       Reqd.respond_with_string reqd response contents ;
       log console "Response: 404 Not found for %a." Fmt.(Dump.list string) target
