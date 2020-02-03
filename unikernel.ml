@@ -3,10 +3,10 @@ open Pasteur
 open Httpaf
 
 module Make
-    (Random : Mirage_types_lwt.RANDOM)
-    (Console : Mirage_types_lwt.CONSOLE)
-    (Clock : Mirage_types_lwt.PCLOCK)
-    (Public : Mirage_types_lwt.KV_RO)
+    (Random : Mirage_random.S)
+    (Console : Mirage_console.S)
+    (Clock : Mirage_clock.PCLOCK)
+    (Public : Mirage_kv.RO)
     (StackV4 : Mirage_stack.V4)
     (Resolver : Resolver_lwt.S)
     (Conduit : Conduit_mirage.S)
@@ -239,7 +239,7 @@ module Make
       log console "> dispatch post."
       >>= post random console store remote reqd
 
-  let request_handler random console public store remote reqd =
+  let request_handler random console public store remote (_ipaddr, _port) reqd =
     let open Httpaf in
     let res () =
       Lwt.catch
@@ -252,7 +252,7 @@ module Make
            Lwt.return (Reqd.respond_with_string reqd response (Printexc.to_string exn))) in
     Lwt.async res
 
-  let error_handler ?request:_ _ _ = ()
+  let error_handler _ ?request:_ _ _ = ()
 
   let fold_left ~f a s =
     let a = ref a in
@@ -267,6 +267,10 @@ module Make
       List.iter (fun chr -> if !pos < len then ( Bytes.set res !pos chr ; incr pos )) safe
     done ; Bytes.unsafe_to_string res
 
+  let ( >>? ) x f = x >>= function
+    | Ok x -> f x
+    | Error err -> Lwt.return (Error err)
+
   let start _ console _ public stack resolver conduit =
     let random = random_bytes (Key_gen.random_length ()) in
     connect resolver conduit >>= fun (store, remote) ->
@@ -274,13 +278,14 @@ module Make
     | Ok `Empty -> failwith "Empty remote repository"
     | Ok (`Head _) ->
       let config =
-        { TCP.port= Key_gen.port ()
-        ; TCP.keepalive= None
-        ; TCP.stack } in
+        { Tuyau_mirage_tcp.port= Key_gen.port ()
+        ; Tuyau_mirage_tcp.keepalive= None
+        ; Tuyau_mirage_tcp.stack } in
+      let request_handler = request_handler random console public store remote in
       let loop () =
-        Tuyau_mirage.serve ~key:Paf.TCP.endpoint config ~service:Paf.TCP.service >>? fun (master, _) ->
+        Tuyau_mirage.serve ~key:Paf.TCP.configuration config ~service:Paf.TCP.service >>? fun (master, _) ->
         Paf.http ~request_handler ~error_handler master in
-      ( match loop () with
+      ( loop () >>= function
         | Ok () -> (* TODO(dinosaure): properly close [master]. *) Lwt.return ()
         | Error err ->
           log console "Got an error: %a." Tuyau_mirage.pp_error err )
