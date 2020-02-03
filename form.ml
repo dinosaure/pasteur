@@ -10,6 +10,7 @@ let checkbox ~name ?label:(contents= [ txt name ]) ?(value= "on") ?(checked= fal
 
 let post_href = Xml.uri_of_string "/"
 let css_href = Xml.uri_of_string "/pastisserie.css"
+let sjcl_href = Xml.uri_of_string "/sjcl.js"
 
 let options =
   let ln = checkbox ~name:"ln" ~label:[ txt "Line numbers" ] () in
@@ -52,7 +53,8 @@ let html ~title:title_contents ~documentation languages =
   html
     (head (title (txt title_contents))
        [ meta ~a:[ a_http_equiv "Content-Type"; a_content "text/html; charset=utf-8;" ] ()
-       ; link ~rel:[ `Stylesheet ] ~href:css_href () ])
+       ; script ~a:[ a_src sjcl_js_href ] (txt "")
+       ; link ~rel:[ `Stylesheet ] ~href:css_href () ]
     (body [ h1 [ txt title_contents
                ; space ()
                ; span ~a:[ a_style "font-size: 12px;" ] [ txt documentation ] ]
