@@ -1,3 +1,6 @@
+open Lwt.Infix
+open Httpaf
+
 module Option = struct
   let bind a f = match a with Some a -> f a | None -> None
   let map f = function Some x -> Some (f x) | None -> None
