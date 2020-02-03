@@ -41,4 +41,4 @@ let packages =
 let () =
   register "pasteur"
     ~packages
-    [ pasteur $ default_random $ default_console $ default_posix_clock $ public $ stack $ resolver $ conduit $ app ]
+    [ pasteur $ default_random $ default_console $ default_posix_clock $ public $ stack $ resolver $ conduit ]
