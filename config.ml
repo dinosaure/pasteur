@@ -28,6 +28,7 @@ let public = generic_kv_ro "public"
 let packages =
   let multipart_form = "git+https://github.com/dinosaure/multipart_form.git" in
   let tuyau = "git+https://github.com/dinosaure/tuyau.git" in
+  let paf = "git+https://github.com/dinosaure/paf-le-chien.git" in
 
   [ package "httpaf"
   ; package "uuidm"
@@ -35,8 +36,8 @@ let packages =
   ; package "irmin-mirage-git"
 
   ; package ~pin:tuyau ~sublibs:["mirage.tcp"] "tuyau"
-  ; package ~pin:multipart_form "multipart_form" ]
-
+  ; package ~pin:multipart_form "multipart_form"
+  ; package ~pin:paf "paf" ]
 
 let () =
   register "pasteur"
