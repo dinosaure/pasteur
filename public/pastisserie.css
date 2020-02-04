@@ -2,6 +2,9 @@
 Design by Théotix - www.theotix.me
 */
 
+#raw{
+	display: none;
+}
 
 body{
 	margin: auto;
