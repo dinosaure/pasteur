@@ -99,7 +99,7 @@ let extract_parts content_type body =
     | Partial { continue; committed; } ->
       Ke.Rke.Weighted.N.shift_exn ke committed ;
       let len' = min (Ke.Rke.Weighted.available ke) len in
-      if len' = 0 then Lwt.wakeup finished (Rresult.R.error_msgf "POST buffer is full!") ;
+      if len' = 0 && len > 0 then Lwt.wakeup finished (Rresult.R.error_msgf "POST buffer is full!") ;
       ( match Ke.Rke.Weighted.N.push ke ~blit:blit ~length:Bigstringaf.length ~off ~len:len' buf with
         | Some _ ->
           if committed = 0 then Ke.Rke.Weighted.compress ke ;
