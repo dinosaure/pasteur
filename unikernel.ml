@@ -155,22 +155,26 @@ module Make
   let load console public reqd key () =
     Public.get public key >>= fun contents -> match contents, Mirage_kv.Key.segments key with
     | Error _, _ -> assert false
-    | Ok contents, [ "highlight.pack.js" ] ->
+    | Ok contents, ([ "highlight.pack.js" ] | [ "pasteur.js" ] | [ "sjcl.js" ]) ->
       let headers = Headers.of_list
           [ "content-length", string_of_int (String.length contents)
-          ; "content-type", "text/javascript" ] in
+          ; "content-type", "text/javascript"
+          ; "connection", "close" ] in
       let response = Response.create ~headers `OK in
       Reqd.respond_with_string reqd response contents ;
       log console "highlight.pack.js delivered!"
     | Ok contents, [ "pastisserie.css" ] ->
       let headers = Headers.of_list
           [ "content-length", string_of_int (String.length contents)
-          ; "content-type", "text/css" ] in
+          ; "content-type", "text/css"
+          ; "connection", "close" ] in
       let response = Response.create ~headers `OK in
       Reqd.respond_with_string reqd response contents ;
       log console "pastisserie.css delivered!"
     | Ok contents, _ ->
-      let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
+      let headers = Headers.of_list
+          [ "content-length", string_of_int (String.length contents)
+          ; "connection", "close" ] in
       let response = Response.create ~headers `OK in
       Reqd.respond_with_string reqd response contents ;
       Lwt.return ()

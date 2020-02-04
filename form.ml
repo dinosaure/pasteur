@@ -10,7 +10,8 @@ let checkbox ~name ?label:(contents= [ txt name ]) ?(value= "on") ?(checked= fal
 
 let post_href = Xml.uri_of_string "/"
 let css_href = Xml.uri_of_string "/pastisserie.css"
-let sjcl_href = Xml.uri_of_string "/sjcl.js"
+let sjcl_js_href = Xml.uri_of_string "/sjcl.js"
+let pasteur_js_href = Xml.uri_of_string "/pasteur.js"
 
 let options =
   let ln = checkbox ~name:"ln" ~label:[ txt "Line numbers" ] () in
@@ -39,7 +40,7 @@ let comment_field =
   ; br () ]
 
 let form lst =
-  form ~a:[ a_method `Post; a_action post_href; a_enctype "multipart/form-data" ]
+  form ~a:[ a_id "pasteur" ]
     ([ input ~a:[ a_input_type `Text; a_name "content"; a_style "display: none;" ] ()
      ; textarea ~a:[ a_name "paste"; a_rows 20; a_cols 80 ] (txt "")
      ; br () ]
@@ -47,14 +48,15 @@ let form lst =
      @ options
      @ name_field
      @ comment_field
-     @ [ input ~a:[ a_input_type `Submit; a_value "Paste!" ] () ])
+     @ [ input ~a:[ a_input_type `Button; a_onclick "doEncrypt();"; a_value "Paste!" ] () ])
 
 let html ~title:title_contents ~documentation languages =
   html
     (head (title (txt title_contents))
        [ meta ~a:[ a_http_equiv "Content-Type"; a_content "text/html; charset=utf-8;" ] ()
        ; script ~a:[ a_src sjcl_js_href ] (txt "")
-       ; link ~rel:[ `Stylesheet ] ~href:css_href () ]
+       ; script ~a:[ a_src pasteur_js_href ] (txt "")
+       ; link ~rel:[ `Stylesheet ] ~href:css_href () ])
     (body [ h1 [ txt title_contents
                ; space ()
                ; span ~a:[ a_style "font-size: 12px;" ] [ txt documentation ] ]
