@@ -67,6 +67,10 @@ let string_of_key = function
 let pp_string ppf x = Fmt.pf ppf "%S" x
 let blit src src_off dst dst_off len = Bigstringaf.blit src ~src_off dst ~dst_off ~len
 
+module Qe = Ke.Rke
+let src = Logs.Src.create "multipart"
+module Log = (val Logs.src_log src : Logs.LOG)
+
 let extract_parts content_type body =
   let open Angstrom.Unbuffered in
 
@@ -79,16 +83,15 @@ let extract_parts content_type body =
 
   let thread, finished = Lwt.task () in
   let state = ref (parse (Multipart_form.parser ~emitters content_type)) in
-  let rb = Bigstringaf.create 4096 in
-  let ke = Ke.Rke.Weighted.from rb in
+  let ke = Qe.create ~capacity:0x1000 Bigarray.Char in
 
   let rec on_eof () =
     match !state with
     | Partial { continue; committed; } ->
-      Ke.Rke.Weighted.N.shift_exn ke committed ;
-      if committed = 0 then Ke.Rke.Weighted.compress ke ;
-      ( match Ke.Rke.Weighted.N.peek ke with
-        | [] -> state := continue rb ~off:0 ~len:0 Complete
+      Qe.N.shift_exn ke committed ;
+      if committed = 0 then Qe.compress ke ;
+      ( match Qe.N.peek ke with
+        | [] -> state := continue Bigstringaf.empty ~off:0 ~len:0 Complete
         | [ slice ] -> state := continue slice ~off:0 ~len:(Bigstringaf.length slice) Complete
         | slice :: _ -> state := continue slice ~off:0 ~len:(Bigstringaf.length slice) Complete ) ;
       on_eof ()
@@ -97,18 +100,15 @@ let extract_parts content_type body =
   and on_read buf ~off ~len =
     match !state with
     | Partial { continue; committed; } ->
-      Ke.Rke.Weighted.N.shift_exn ke committed ;
-      let len' = min (Ke.Rke.Weighted.available ke) len in
-      if len' = 0 && len > 0 then Lwt.wakeup finished (Rresult.R.error_msgf "POST buffer is full!") ;
-      ( match Ke.Rke.Weighted.N.push ke ~blit:blit ~length:Bigstringaf.length ~off ~len:len' buf with
-        | Some _ ->
-          if committed = 0 then Ke.Rke.Weighted.compress ke ;
-          let[@warning "-8"] slice :: _ = Ke.Rke.Weighted.N.peek ke in
-          state := continue slice ~off:0 ~len:(Bigstringaf.length slice) Incomplete ;
-          if len' - len = 0
-          then Body.schedule_read body ~on_eof ~on_read
-          else on_read buf ~off:(off + len') ~len:(len - len')
-        | None -> Lwt.wakeup finished (Rresult.R.error_msgf "POST buffer is full!") )
+      Qe.N.shift_exn ke committed ;
+      if committed = 0 then Qe.compress ke ;
+      Qe.N.push ke ~blit ~length:Bigstringaf.length ~off ~len buf ;
+      Log.debug (fun m -> m "Length of internal queue: %x byte(s)." (Qe.length ke)) ;
+      if Qe.capacity ke >= 0x10000 then Lwt.wakeup finished (Rresult.R.error_msgf "POST buffer is too big!") ;
+      if not (Qe.is_empty ke)
+      then ( let[@warning "-8"] slice :: _ = Qe.N.peek ke in
+             state := continue slice ~off:0 ~len:(Bigstringaf.length slice) Incomplete ) ;
+      Body.schedule_read body ~on_eof ~on_read
     | Fail _ -> Lwt.wakeup finished (Rresult.R.error_msgf "bad POST request")
     | Done (_, v) -> Lwt.wakeup finished (Rresult.R.ok v) in
   let open Lwt.Infix in
