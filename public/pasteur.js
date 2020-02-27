@@ -39,7 +39,14 @@ function doEncrypt () {
 function doDecrypt() {
   const key = sjcl.codec.base64.toBits(location.hash.substr(1));
   var ct = document.getElementById("raw").innerHTML;
-  var decrypted = sjcl.decrypt(key, ct);
 
-  document.getElementById("output").innerHTML = decrypted;
+  try
+  {
+    var decrypted = sjcl.decrypt(key, ct);
+    document.getElementById("output").innerHTML = decrypted;
+  }
+  catch(err)
+  {
+    document.getElementById("output").innerHTML = "Gimme the secret key buddy!";
+  }
 }
