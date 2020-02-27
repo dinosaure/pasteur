@@ -17,7 +17,7 @@ let random_len =
 let pasteur =
   foreign "Unikernel.Make"
     ~keys:[ Key.abstract remote; Key.abstract port; Key.abstract random_len ]
-    (random @-> console @-> pclock @-> kv_ro @-> stackv4 @-> resolver @-> conduit @-> job)
+    (random @-> console @-> time @-> pclock @-> kv_ro @-> stackv4 @-> resolver @-> conduit @-> job)
 
 let stack = generic_stackv4 default_network
 let conduit = conduit_direct stack
@@ -35,11 +35,11 @@ let packages =
   ; package "tyxml"
   ; package "irmin-mirage-git"
 
-  ; package ~pin:tuyau ~sublibs:["mirage.tcp"] "tuyau"
+  ; package ~pin:tuyau ~sublibs:["tcp"] "tuyau-mirage"
   ; package ~pin:multipart_form "multipart_form"
   ; package ~pin:paf "paf" ]
 
 let () =
   register "pasteur"
     ~packages
-    [ pasteur $ default_random $ default_console $ default_posix_clock $ public $ stack $ resolver $ conduit ]
+    [ pasteur $ default_random $ default_console $ default_time $ default_posix_clock $ public $ stack $ resolver $ conduit ]
