@@ -5,13 +5,14 @@ open Httpaf
 module Make
     (Random : Mirage_random.S)
     (Console : Mirage_console.S)
+    (Time : Mirage_time.S)
     (Clock : Mirage_clock.PCLOCK)
     (Public : Mirage_kv.RO)
     (StackV4 : Mirage_stack.V4)
     (Resolver : Resolver_lwt.S)
     (Conduit : Conduit_mirage.S)
 = struct
-  module Paf = Paf.Make(StackV4)
+  module Paf = Paf.Make(Time)(StackV4)
   module Store = Irmin_mirage_git.Mem.KV(Irmin.Contents.String)
   module Sync = Irmin.Sync(Store)
 
@@ -275,7 +276,7 @@ module Make
     | Ok x -> f x
     | Error err -> Lwt.return (Error err)
 
-  let start _ console _ public stack resolver conduit =
+  let start _ console _ _ public stack resolver conduit =
     let random = random_bytes (Key_gen.random_length ()) in
     connect resolver conduit >>= fun (store, remote) ->
     Sync.pull store remote `Set >>= function
@@ -284,6 +285,7 @@ module Make
       let config =
         { Tuyau_mirage_tcp.port= Key_gen.port ()
         ; Tuyau_mirage_tcp.keepalive= None
+        ; Tuyau_mirage_tcp.nodelay= false
         ; Tuyau_mirage_tcp.stack } in
       let request_handler = request_handler random console public store remote in
       let loop () =
