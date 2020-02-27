@@ -36,6 +36,7 @@ let packages =
   ; package "irmin-mirage-git"
 
   ; package ~pin:tuyau "tuyau"
+  ; package ~pin:tuyau "tuyau-tls"
   ; package ~pin:tuyau ~sublibs:["tcp"] "tuyau-mirage"
   ; package ~pin:multipart_form "multipart_form"
   ; package ~pin:paf "paf" ]
