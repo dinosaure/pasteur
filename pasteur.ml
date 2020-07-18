@@ -93,7 +93,7 @@ let extract_parts content_type body =
       ( match Qe.N.peek ke with
         | [] -> state := continue Bigstringaf.empty ~off:0 ~len:0 Complete
         | [ slice ] -> state := continue slice ~off:0 ~len:(Bigstringaf.length slice) Complete
-        | slice :: _ -> state := continue slice ~off:0 ~len:(Bigstringaf.length slice) Complete ) ;
+        | slice :: _ -> state := continue slice ~off:0 ~len:(Bigstringaf.length slice) Incomplete ) ;
       on_eof ()
     | Fail _ -> Lwt.wakeup finished (Rresult.R.error_msgf "bad POST request")
     | Done (_, v) -> Lwt.wakeup finished (Rresult.R.ok v)
