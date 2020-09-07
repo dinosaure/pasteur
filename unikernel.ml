@@ -6,23 +6,32 @@ module Make
     (Random : Mirage_random.S)
     (Console : Mirage_console.S)
     (Time : Mirage_time.S)
-    (Clock : Mirage_clock.PCLOCK)
+    (Mclock : Mirage_clock.MCLOCK)
+    (Pclock : Mirage_clock.PCLOCK)
     (Public : Mirage_kv.RO)
     (StackV4 : Mirage_stack.V4)
-    (Resolver : Resolver_lwt.S)
-    (Conduit : Conduit_mirage.S)
 = struct
   module Paf = Paf.Make(Time)(StackV4)
+  module TCP = Paf.TCP
+  module DNS = Conduit_mirage_dns.Make(Random)(Time)(Mclock)(StackV4)
+  module SSH = Awa_conduit.Make(Lwt)(Conduit_mirage)(Mclock)
+  module Certify = Dns_certify_mirage.Make(Random)(Pclock)(Time)(StackV4)
   module Store = Irmin_mirage_git.Mem.KV(Irmin.Contents.String)
   module Sync = Irmin.Sync(Store)
 
+  let ssh_protocol = SSH.protocol_with_ssh TCP.protocol
+
   let log console fmt = Fmt.kstrf (Console.log console) fmt
 
-  let connect resolver conduit =
+  let git_edn edn =
+    match Smart_git.endpoint_of_string edn with
+    | Ok edn -> edn
+    | Error (`Msg err) -> Fmt.invalid_arg "Invalid Git endpoint (%s): %s." edn err
+
+  let connect_store ~resolvers =
     let config = Irmin_mem.config () in
     Store.Repo.v config >>= Store.master >|= fun repository ->
-    repository, Store.remote ~conduit ~resolver (Key_gen.remote ())
-  (* TODO(dinosaure): try to remove [conduit]. *)
+    repository, Store.remote ~resolvers (Key_gen.remote ())
 
   let load console repository remote key =
     Store.find repository key >>= function
@@ -188,7 +197,7 @@ module Make
       | `Commit commit -> Lwt.return commit
       | `Empty -> failwith "Empty repository" in
     commit0 >>= fun commit0 ->
-    let _, date = Clock.now_d_ps () in
+    let _, date = Pclock.now_d_ps () in
     let info () = Irmin.Info.v ~date ~author (String.concat "/" key) in
     Store.set ~parents:[ commit0 ] ~info store key value >>= function
     | Error (`Conflict c) -> Fmt.failwith "Conflict! [%s]" c
@@ -276,25 +285,87 @@ module Make
     | Ok x -> f x
     | Error err -> Lwt.return (Error err)
 
-  let start _ console _ _ public stack resolver conduit =
-    let random = random_bytes (Key_gen.random_length ()) in
-    connect resolver conduit >>= fun (store, remote) ->
+  let exit_expired = 80
+
+  let quit_before_expire = function
+    | `Single (server :: _, _) ->
+      let expiry = snd (X509.Certificate.validity server) in
+      let diff = Ptime.diff expiry (Ptime.v (Pclock.now_d_ps ())) in
+      ( match Ptime.Span.to_int_s diff with
+        | None -> invalid_arg "couldn't convert span to seconds"
+        | Some x when x < 0 -> invalid_arg "diff is negative"
+        | Some x ->
+          Lwt.async @@ fun () ->
+          Time.sleep_ns Int64.(sub (Duration.of_sec x) (Duration.of_day 1)) >|= fun () ->
+          exit exit_expired )
+    | _ -> ()
+
+  let tls stack hostname =
+    Certify.retrieve_certificate stack ~dns_key:(Key_gen.dns_key ())
+      ~hostname (Key_gen.dns_server ()) (Key_gen.dns_port ()) >>= function
+    | Error (`Msg err) -> Lwt.fail (Failure err)
+    | Ok certificates ->
+      quit_before_expire certificates ;
+      let conf = Tls.Config.server ~certificates () in
+      Lwt.return conf
+
+  let ssh_cfg edn =
+    match edn, Key_gen.ssh_seed (), Key_gen.ssh_auth () with
+    | { Smart_git.scheme= `SSH user; path; _ }, Some seed, Some auth ->
+      let authenticator = match Awa.Keys.authenticator_of_string auth with
+        | Ok v -> Some v
+        | Error _err -> None in
+      let seed = Awa.Keys.of_seed seed in
+      let req = Awa.Ssh.Exec (Fmt.strf "git-upload-pack '%s'" path) in
+      Some { Awa_conduit.user; key= seed; req
+           ; authenticator }
+    | _ -> None
+
+  let start _random console _time _mclock _pclock public stack =
+    let seed = random_bytes (Key_gen.random_length ()) in
+    let dns = DNS.create stack in
+    let ssh_cfg = ssh_cfg (git_edn (Key_gen.remote ())) in
+    let irmin_resolvers =
+      let tcp_resolve ~port = DNS.resolv stack ?nameserver:None dns ~port in
+      match ssh_cfg with
+      | Some ssh_cfg ->
+        let ssh_resolve domain_name =
+          tcp_resolve ~port:22 domain_name >>= function
+          | Some edn -> Lwt.return_some (edn, ssh_cfg)
+          | None -> Lwt.return_none in
+        Conduit_mirage.empty
+        |> Conduit_mirage.add
+            ~priority:10 ssh_protocol ssh_resolve
+        |> Conduit_mirage.add
+             TCP.protocol (tcp_resolve ~port:9418)
+      | None ->
+        Conduit_mirage.add
+          TCP.protocol (tcp_resolve ~port:9418)
+          Conduit_mirage.empty in
+    connect_store ~resolvers:irmin_resolvers >>= fun (store, remote) ->
+    tls stack Domain_name.(host_exn (of_string_exn (Key_gen.hostname ())))
+    >>= fun tls_config ->
     Sync.pull store remote `Set >>= function
-    | Ok `Empty -> failwith "Empty remote repository"
-    | Ok (`Head _) ->
-      let config =
-        { Tuyau_mirage_tcp.port= Key_gen.port ()
-        ; Tuyau_mirage_tcp.keepalive= None
-        ; Tuyau_mirage_tcp.nodelay= false
-        ; Tuyau_mirage_tcp.stack } in
-      let request_handler = request_handler random console public store remote in
-      let loop () =
-        Tuyau_mirage.serve ~key:Paf.TCP.configuration config ~service:Paf.TCP.service >>? fun (master, _) ->
-        Paf.http ~request_handler ~error_handler master in
-      ( loop () >>= function
-        | Ok () -> (* TODO(dinosaure): properly close [master]. *) Lwt.return ()
-        | Error err ->
-          log console "Got an error: %a." Tuyau_mirage.pp_error err )
     | Error (`Msg err) -> failwith err
     | Error (`Conflict err) -> failwith err
+    | Ok `Empty | Ok (`Head _) ->
+      let tcp_config ~port =
+        { Conduit_mirage_tcp.port= port
+        ; Conduit_mirage_tcp.keepalive= None
+        ; Conduit_mirage_tcp.nodelay= false
+        ; Conduit_mirage_tcp.stack } in
+      let request_handler = request_handler seed console public store remote in
+      let http_fiber () =
+        (Conduit_mirage.Service.init
+           (tcp_config ~port:(Key_gen.http_port ()))
+           ~service:TCP.service >>? fun socket ->
+         Paf.http ~request_handler ~error_handler socket) >>= fun _ ->
+        Lwt.return () in
+      let https_fiber () =
+        (Conduit_mirage.Service.init
+           (tcp_config ~port:(Key_gen.https_port ()), tls_config)
+           ~service:Paf.tls_service >>? fun socket ->
+         Paf.https ~request_handler ~error_handler socket) >>= fun _ ->
+        Lwt.return () in
+      Lwt.join [ http_fiber (); https_fiber () ]
 end
