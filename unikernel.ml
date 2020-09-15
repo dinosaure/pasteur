@@ -326,7 +326,17 @@ module Make
     let dns = DNS.create stack in
     let ssh_cfg = ssh_cfg (git_edn (Key_gen.remote ())) in
     let irmin_resolvers =
-      let tcp_resolve ~port = DNS.resolv stack ?nameserver:None dns ~port in
+      let tcp_resolve ~port domain_name =
+        match Domain_name.to_string domain_name, Key_gen.ipv4_gateway () with
+        | "gateway", Some gateway ->
+          Lwt.return_some
+            { Conduit_mirage_tcp.stack
+            ; Conduit_mirage_tcp.keepalive= None
+            ; Conduit_mirage_tcp.nodelay= false
+            ; Conduit_mirage_tcp.ip= gateway
+            ; Conduit_mirage_tcp.port }
+        | _ ->
+          DNS.resolv stack ?nameserver:None dns ~port domain_name in
       match ssh_cfg with
       | Some ssh_cfg ->
         let ssh_resolve domain_name =
