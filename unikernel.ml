@@ -202,7 +202,8 @@ module Make
     Store.set ~parents:[ commit0 ] ~info store key value >>= function
     | Error (`Conflict c) -> Fmt.failwith "Conflict! [%s]" c
     | Error (`Test_was _) | Error (`Too_many_retries _) -> failwith "Error to update local repository!"
-    | Ok () -> Sync.push store remote >>= function
+    | Ok () ->
+      Sync.push store remote >>= function
       | Ok `Empty -> Fmt.failwith "Got an empty repository"
       | Ok (`Head commit1) ->
         log console ">>> commit:%a -> commit:%a." Store.Commit.pp_hash commit0 Store.Commit.pp_hash commit1
@@ -237,27 +238,28 @@ module Make
           Reqd.respond_with_string reqd response contents ;
           Lwt.return ()
 
-  let main random console public store remote reqd = function
+  let main random console public store rd_remote wr_remote reqd = function
     | INDEX ->
       log console "> dispatch index." >>= index console reqd
     | GET { target; ln; hl; raw= false; } ->
       log console "> dispatch get:%a." Fmt.(Dump.list string) target
-      >>= show ~ln ?hl console store remote reqd target
+      >>= show ~ln ?hl console store rd_remote reqd target
     | GET { target; raw= true; _ } ->
       log console "> dispatch raw:%a." Fmt.(Dump.list string) target
-      >>= show_raw console store remote reqd target
+      >>= show_raw console store rd_remote reqd target
     | CONTENTS key ->
       log console "> dispatch contents:%a." Mirage_kv.Key.pp key
       >>= load console public reqd key
     | POST ->
       log console "> dispatch post."
-      >>= post random console store remote reqd
+      >>= post random console store wr_remote reqd
 
-  let request_handler random console public store remote (_ipaddr, _port) reqd =
+  let request_handler random console public store rd_remote wr_remote (_ipaddr, _port) reqd =
     let open Httpaf in
     let res () =
       Lwt.catch
-        (fun () -> dispatch public reqd >>= main random console public store remote reqd)
+        (fun () -> dispatch public reqd >>= main random console public store rd_remote
+            wr_remote reqd)
         (fun exn ->
            let res = Printexc.to_string exn in
            log console "Got an error: %s." res >>= fun () ->
@@ -309,14 +311,16 @@ module Make
       let conf = Tls.Config.server ~certificates () in
       Lwt.return conf
 
-  let ssh_cfg edn =
+  let ssh_cfg cap edn =
     match edn, Key_gen.ssh_seed (), Key_gen.ssh_auth () with
     | { Smart_git.scheme= `SSH user; path; _ }, Some seed, Some auth ->
       let authenticator = match Awa.Keys.authenticator_of_string auth with
         | Ok v -> Some v
         | Error _err -> None in
       let seed = Awa.Keys.of_seed seed in
-      let req = Awa.Ssh.Exec (Fmt.strf "git-upload-pack '%s'" path) in
+      let req = match cap with
+        | `Rd -> Awa.Ssh.Exec (Fmt.strf "git-upload-pack '%s'" path)
+        | `Wr -> Awa.Ssh.Exec (Fmt.strf "git-receive-pack '%s'" path) in
       Some { Awa_conduit.user; key= seed; req
            ; authenticator }
     | _ -> None
@@ -324,8 +328,8 @@ module Make
   let start _random console _time _mclock _pclock public stack =
     let seed = random_bytes (Key_gen.random_length ()) in
     let dns = DNS.create stack in
-    let ssh_cfg = ssh_cfg (git_edn (Key_gen.remote ())) in
-    let irmin_resolvers =
+    let resolvers cap =
+      let ssh_cfg = ssh_cfg cap (git_edn (Key_gen.remote ())) in
       let tcp_resolve ~port domain_name =
         match Domain_name.to_string domain_name, Key_gen.ipv4_gateway () with
         | "gateway", Some gateway ->
@@ -352,10 +356,11 @@ module Make
         Conduit_mirage.add
           TCP.protocol (tcp_resolve ~port:9418)
           Conduit_mirage.empty in
-    connect_store ~resolvers:irmin_resolvers >>= fun (store, remote) ->
+    connect_store ~resolvers:(resolvers `Rd) >>= fun (store, rd_remote) ->
+    let wr_remote = Store.remote ~resolvers:(resolvers `Wr) (Key_gen.remote ()) in
     tls stack Domain_name.(host_exn (of_string_exn (Key_gen.hostname ())))
     >>= fun tls_config ->
-    Sync.pull store remote `Set >>= function
+    Sync.pull store rd_remote `Set >>= function
     | Error (`Msg err) -> failwith err
     | Error (`Conflict err) -> failwith err
     | Ok `Empty | Ok (`Head _) ->
@@ -364,7 +369,7 @@ module Make
         ; Conduit_mirage_tcp.keepalive= None
         ; Conduit_mirage_tcp.nodelay= false
         ; Conduit_mirage_tcp.stack } in
-      let request_handler = request_handler seed console public store remote in
+      let request_handler = request_handler seed console public store rd_remote wr_remote in
       let http_fiber () =
         (Conduit_mirage.Service.init
            (tcp_config ~port:(Key_gen.http_port ()))
