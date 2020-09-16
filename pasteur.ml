@@ -18,9 +18,8 @@ let formatter_of_body body =
   let flush () = Body.flush body (fun () -> ()) in
   Format.make_formatter output flush
 
-let parse_content_type v =
-  let open Angstrom in
-  parse_string Multipart_form.(Rfc2045.content <* Rfc822.crlf) (v ^ "\r\n")
+let parse_content_type str =
+  Multipart_form.Content_type.of_string (str ^ "\r\n")
 
 let extract_content_type request =
   let exception Found in
@@ -37,18 +36,6 @@ let extract_content_type request =
       (Headers.to_list headers) ; None
   with Found -> !content_type
 
-let name_of_fields fields =
-  let open Multipart_form.Field in
-  let name = ref None in
-  let exception Found in
-  try List.iter (function
-      | Field (Disposition, { parameters; _ }) ->
-        ( match List.assoc "name" parameters with
-          | `Token v | `String v -> name := Some v ; raise Found
-          | exception Not_found -> () )
-      | _ -> () ) fields ; None
-  with Found -> !name
-
 type key = Paste | User | Comment | Ln | Raw | Hl
 
 let key_of_string = function
@@ -59,6 +46,13 @@ let key_of_string = function
   | "raw" -> Some Raw
   | "hl" -> Some Hl
   | _ -> None
+
+let get_key header =
+  let open Multipart_form in
+  let ( >>= ) = Option.bind in
+  Header.content_disposition header >>= fun v ->
+  Content_disposition.name v >>= fun n ->
+  key_of_string n
 
 let string_of_key = function
   | Paste -> "paste" | User -> "user" | Comment -> "comment" | Ln -> "ln"
@@ -75,7 +69,8 @@ let extract_parts content_type body =
   let open Angstrom.Unbuffered in
 
   let hashtbl = Hashtbl.create 7 in
-  let emitters fields = match Option.(name_of_fields fields >>= key_of_string) with
+  let emitters header = 
+    match get_key header with
     | Some key ->
       let stream, push = Lwt_stream.create () in
       Hashtbl.add hashtbl key stream ; push, Some key
@@ -118,5 +113,3 @@ let extract_parts content_type body =
   | Ok _ ->
     let lst = Hashtbl.fold (fun k s a -> (k, Lwt_stream.to_list s) :: a) hashtbl [] in
     Lwt_list.map_p (fun (k, t) -> t >|= fun v -> (k, String.concat "" v)) lst >|= Rresult.R.ok
-
-
