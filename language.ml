@@ -266,3 +266,7 @@ let value_of_language = function
   | `VHDL -> "vhdl"
   | `Verilog -> "verilog"
   | `x86 -> "x86asm"
+
+let json =
+  Json_encoding.string_enum
+    (List.map (fun v -> value_of_language v, v) all)

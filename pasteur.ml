@@ -36,7 +36,7 @@ let extract_content_type request =
       (Headers.to_list headers) ; None
   with Found -> !content_type
 
-type key = Paste | User | Comment | Ln | Raw | Hl
+type key = Paste | User | Comment | Ln | Raw | Hl | Encrypted
 
 let key_of_string = function
   | "paste" -> Some Paste
@@ -45,6 +45,7 @@ let key_of_string = function
   | "ln" -> Some Ln
   | "raw" -> Some Raw
   | "hl" -> Some Hl
+  | "encrypted" -> Some Encrypted
   | _ -> None
 
 let get_key header =
@@ -56,7 +57,7 @@ let get_key header =
 
 let string_of_key = function
   | Paste -> "paste" | User -> "user" | Comment -> "comment" | Ln -> "ln"
-  | Raw -> "raw" | Hl -> "hl"
+  | Raw -> "raw" | Hl -> "hl" | Encrypted -> "encrypted"
 
 let pp_string ppf x = Fmt.pf ppf "%S" x
 let blit src src_off dst dst_off len = Bigstringaf.blit src ~src_off dst ~dst_off ~len
