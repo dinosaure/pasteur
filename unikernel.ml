@@ -66,9 +66,14 @@ module Make
     | _ -> Lwt.return_none
 
   let tls_connect scheme domain_name cfg stack ipaddr port =
+    Logs.debug (fun m -> m "Start a TLS connection with %a:%d [%a]."
+      Fmt.(Dump.option Domain_name.pp) domain_name port Ipaddr.pp ipaddr) ;
     match scheme with
     | `HTTPS -> Lwt.return_some (domain_name, cfg, stack, ipaddr, port)
-    | _ -> Lwt.return_none
+    | _ ->
+      Logs.warn (fun m -> m "Avoid the TLS connection with %a:%d."
+        Ipaddr.pp ipaddr port) ;
+      Lwt.return_none
 
   let dns_resolver_v4 dns domain_name =
     Resolver.gethostbyname dns domain_name >>= function
@@ -87,8 +92,6 @@ module Make
   let provision ?production stackv4 stack_v = function
     | DNS cfg -> DNS_Letsencrypt.provision_certificate stackv4 cfg
     | HTTP cfg ->
-      let stop = Lwt_switch.create () in
-
       let dns   = Mimic.make ~name:"dns" in
       let stack = Mimic.make ~name:"stack" in
       let tls   = Mimic.make ~name:"tls" in
@@ -97,19 +100,24 @@ module Make
         let open HTTP_Letsencrypt in
         Mimic.empty
         |> Mimic.(fold Paf.tcp_edn Fun.[ req scheme; req stack; req ipaddr; dft port 80; ] ~k:tcp_connect)
-        |> Mimic.(fold Paf.tls_edn Fun.[ req scheme; opt domain_name; dft tls null; req stack; req ipaddr; dft port 443; ] ~k:tls_connect)
-        |> Mimic.(fold ipaddr Fun.[ req dns; req domain_name ] ~k:dns_resolver_v6)
+        |> Mimic.(fold Paf.tls_edn Fun.[ req scheme; opt domain_name; dft tls null; req stack; req ipaddr; dft port 443; ]
+                    ~k:tls_connect)
+        (* |> Mimic.(fold ipaddr Fun.[ req dns; req domain_name ] ~k:dns_resolver_v6) *)
         |> Mimic.(fold ipaddr Fun.[ req dns; req domain_name ] ~k:dns_resolver_v4)
         |> Mimic.add dns (Resolver.create stackv4)
         |> Mimic.add stack stack_v in
       Paf.init ~port:80 stack_v >>= fun service ->
+      Lwt_switch.with_switch @@ fun stop ->
       let `Initialized t = Paf.http ~stop
         ~request_handler:HTTP_Letsencrypt.request_handler
         ~error_handler service in
       let fiber =
         HTTP_Letsencrypt.provision_certificate ?production cfg ctx >>= fun res ->
+        Logs.info (fun m -> m "Got a TLS certificate and stop the let's encrypt server.") ;
         Lwt_switch.turn_off stop >>= fun () -> Lwt.return res in
-      Lwt.both t fiber >|= snd
+      Lwt.both t fiber >>= fun (_, tls) ->
+      Logs.info (fun m -> m "Let's encrypt server terminated.") ;
+      Lwt.return tls
 
   module Store = Irmin_mirage_git.Mem.KV(Blob)
   module Sync = Irmin.Sync(Store)
@@ -435,10 +443,10 @@ module Make
     | Some cfg ->
       Logs.info (fun m -> m "Download TLS certificate.") ;
       provision ~production:(Key_gen.production ()) stackv4 stack cfg >>= quit_before_expire >>= fun certificates ->
+      Logs.info (fun m -> m "Got a TLS certificate for the server.") ;
       let tls = Tls.Config.server ~certificates () in
       let request_handler = request_handler seed console public store rd_remote wr_remote in
       let https_port = Option.value (Key_gen.https_port ()) ~default:443 in
-      Paf.init ~port:(Key_gen.http_port ()) stack >|= Paf.http ~request_handler ~error_handler >>= fun (`Initialized fiber0) ->
-      Paf.init ~port:https_port stack >|= Paf.https ~tls ~request_handler ~error_handler >>= fun (`Initialized fiber1) ->
-      Lwt.join [ fiber0; fiber1 ]
+      Paf.init ~port:https_port stack >|= Paf.https ~tls ~request_handler ~error_handler >>= fun (`Initialized fiber0) ->
+      fiber0
 end
