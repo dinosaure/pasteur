@@ -2,11 +2,16 @@
 
 Pasteur is an unikernel (MirageOS) which provides an mini-website to paste
 snippets and save them into a Git repository. The goal of this project is to be
-an example of: how to write an unikernel today?
+an example of: how to write a website as an unikernel today?
 
-This example uses several stacks like the HTTP stack (with [http/af][http-af]),
-the Git stack (with [ocaml-git][ocaml-git]) with [Irmin][irmin] with underlying
-layers - available in the MirageOS organization.
+This example uses several stacks:
+- HTTP with [http/af][http-af]
+- Git with [ocaml-git][ocaml-git]
+- Irmin with [irmin][irmin]
+- SSH with [awa][awa]
+- TLS with [ocaml-tls][ocaml-tls]
+- TCP/IP of course with [mirage-tcpip][mirage-tcpip]
+- JavaScript with [`js_of_ocaml`][js-of-ocaml] and [brr][brr]
 
 Design comes from [paste.isomorphis.me][paste].
 

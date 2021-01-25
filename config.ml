@@ -236,10 +236,11 @@ let packages =
   [ package "httpaf"
   ; package "uuidm"
   ; package "tyxml"
-  ; package "irmin-mirage-git"
+  ; package "git-mirage" ~min:"3.1.0"
+  ; package "irmin-mirage-git" ~min:"2.3.0"
   ; package ~sublibs:[ "mirage" ] "dns-certify"
   ; package "multipart_form"
-  ; package "paf"
+  ; package "paf" ~pin:"git+https://github.com/dinosaure/paf-le-chien.git#cohttp-and-letsencrypt"
   ; package "ocplib-json-typed"
   ; package "ezjsonm"
   ; package ~sublibs:[ "le" ] "paf" ]
