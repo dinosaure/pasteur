@@ -45,7 +45,6 @@ module Make
     (Pclock : Mirage_clock.PCLOCK)
     (Public : Mirage_kv.RO)
     (_ : sig end)
-    (_ : sig end)
     (StackV4 : Mirage_stack.V4)
     (Stack : Mirage_stack.V4V6)
 = struct
@@ -410,18 +409,22 @@ module Make
     | Error (`Msg err) -> failwith "TLS: %s" err
 
   let cfg () =
-    match Key_gen.dns_key (), Key_gen.dns_port (), Key_gen.dns_addr (), Key_gen.cert_seed (),
-          Key_gen.email (), Key_gen.account_seed (), Key_gen.hostname (), Key_gen.https_port () with
-    | Some dns_key, dns_port, Some dns_addr, cert_seed,
-      _, _, tls_hostname, _ ->
+    match Key_gen.https (),
+          Key_gen.dns_key (), Key_gen.dns_port (), Key_gen.dns_addr (), Key_gen.cert_seed (),
+          Key_gen.email (), Key_gen.account_seed (), Key_gen.hostname () with
+    | true, Some dns_key, dns_port, Some dns_addr, cert_seed,
+      _, _, tls_hostname ->
       Logs.info (fun m -> m "Ready to get the TLS certificate from the DNS service.") ;
       let hostname = Rresult.(R.error_msg_to_invalid_arg Domain_name.(of_string tls_hostname >>= host)) in
       Some (DNS DLE.{ key= dns_key; port= dns_port; addr= dns_addr; seed= cert_seed; hostname; })
-    | _, _, _, cert_seed, email, account_seed, tls_hostname, Some _ ->
+    | true, _, _, _, cert_seed, email, account_seed, tls_hostname ->
       Logs.info (fun m -> m "Ready to get the TLS certificate from a local HTTP service.") ;
       let hostname = Rresult.(R.error_msg_to_invalid_arg Domain_name.(of_string tls_hostname >>= host)) in
       let email = Option.bind email (Rresult.R.to_option <.> Emile.of_string) in
       Some (HTTP LE.{ email; seed= account_seed; certificate_seed= cert_seed; hostname; })
+    | true, _, _, _, _, _, _, _ ->
+      Logs.warn (fun m -> m "Missing arguments to start an HTTP server with TLS.") ;
+      None
     | _ -> None
 
   let pull (store, rd_remote) = Sync.pull store rd_remote `Set >>= function
@@ -429,16 +432,17 @@ module Make
     | Error (`Conflict err) -> Lwt.fail (Failure err)
     | Ok (`Empty | `Head _) -> Lwt.return (store, rd_remote)
 
-  let start _random console _time _mclock _pclock public ctx_rd ctx_wr stackv4 stack =
+  let start _random console _time _mclock _pclock public ctx stackv4 stack =
     let seed = random_bytes (Key_gen.random_length ()) in
-    connect_store ~ctx:ctx_rd >>= pull >>= fun (store, rd_remote) ->
-    let wr_remote = Store.remote ~ctx:ctx_wr (Key_gen.remote ()) in
+    connect_store ~ctx >>= pull >>= fun (store, rd_remote) ->
+    let wr_remote = Store.remote ~ctx (Key_gen.remote ()) in
     Logs.info (fun m -> m "Local store synchronized.") ;
     match cfg () with
     | None ->
       Logs.info (fun m -> m "Initialise an HTTP server (no HTTPS).") ;
       let request_handler = request_handler seed console public store rd_remote wr_remote in
-      Paf.init ~port:(Key_gen.http_port ()) stack >|= Paf.http ~request_handler ~error_handler >>= fun (`Initialized fiber0) ->
+      let port = Option.value ~default:80 (Key_gen.port ()) in
+      Paf.init ~port stack >|= Paf.http ~request_handler ~error_handler >>= fun (`Initialized fiber0) ->
       fiber0
     | Some cfg ->
       Logs.info (fun m -> m "Download TLS certificate.") ;
@@ -446,7 +450,7 @@ module Make
       Logs.info (fun m -> m "Got a TLS certificate for the server.") ;
       let tls = Tls.Config.server ~certificates () in
       let request_handler = request_handler seed console public store rd_remote wr_remote in
-      let https_port = Option.value (Key_gen.https_port ()) ~default:443 in
-      Paf.init ~port:https_port stack >|= Paf.https ~tls ~request_handler ~error_handler >>= fun (`Initialized fiber0) ->
+      let port = Option.value ~default:443 (Key_gen.port ()) in
+      Paf.init ~port stack >|= Paf.https ~tls ~request_handler ~error_handler >>= fun (`Initialized fiber0) ->
       fiber0
 end
