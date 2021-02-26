@@ -168,25 +168,9 @@ let show () =
   | _ ->
     Fut.error (Jv.Error.v err_source_or_output_not_found)
 
-open Fut.Syntax
-
-let post () =
-  let* res = post () in
-  match res with
-  | Ok () -> Fut.return ()
-  | Error err ->
-    Console.(error [str "Got an error: %s"; Jv.Error.message err]) ;
-    Fut.return ()
-
-let show () =
-  let* res = show () in
-  match res with
-  | Ok () -> Fut.return ()
-  | Error err ->
-    Console.(error [str "Got an error: %s"; Jv.Error.message err]) ;
-    Fut.return ()
+let const x = fun _ -> x
 
 let () =
-  Jv.set Jv.global "doPost" (Jv.repr post) ;
-  Jv.set Jv.global "doShow" (Jv.repr show)
+  Jv.set Jv.global "doPost" (Jv.repr (fun () -> Fut.to_promise ~ok:(const Jv.undefined) (post ()))) ;
+  Jv.set Jv.global "doShow" (Jv.repr (fun () -> Fut.to_promise ~ok:(const Jv.undefined) (show ())))
 

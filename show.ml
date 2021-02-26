@@ -20,8 +20,10 @@ let html ?code:code_class ?(encrypted= true) code_contents =
           ; pre [ code ~a [ txt "" ] ]
           ; div ~a:[ a_id "encrypted"; a_style "display: none;" ] [ txt (if encrypted then "on" else "off") ]
           ; script (txt "window.onload = function () { \
-                           doShow(); \
-                           document.querySelectorAll('pre code').forEach(function (block) { \
-                             hljs.highlightBlock(block); \
+                           doShow().then(function (n) { \
+                             console.log('launch hljs'); \
+                             document.querySelectorAll('pre code').forEach(function (block) { \
+                               hljs.highlightBlock(block); \
+                             }); \
                            }); \
                          }") ])
