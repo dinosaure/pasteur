@@ -19,4 +19,9 @@ let html ?code:code_class ?(encrypted= true) code_contents =
     (body [ div ~a:[ a_id "raw" ] [ txt code_contents ]
           ; pre [ code ~a [ txt "" ] ]
           ; div ~a:[ a_id "encrypted"; a_style "display: none;" ] [ txt (if encrypted then "on" else "off") ]
-          ; script (txt "window.onload = function () { doShow(); hljs.configure({ languages: [] }); hljs.initHighlighting(); }") ])
+          ; script (txt "window.onload = function () { \
+                           doShow(); \
+                           document.querySelectorAll('pre code').forEach(function (block) { \
+                             hljs.highlightBlock(block); \
+                           }); \
+                         }") ])
