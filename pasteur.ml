@@ -89,24 +89,34 @@ let extract_parts content_type body =
       ( match Qe.N.peek ke with
         | [] -> state := continue Bigstringaf.empty ~off:0 ~len:0 Complete
         | [ slice ] -> state := continue slice ~off:0 ~len:(Bigstringaf.length slice) Complete
-        | slice :: _ -> state := continue slice ~off:0 ~len:(Bigstringaf.length slice) Complete ) ;
+        | slice :: _ -> state := continue slice ~off:0 ~len:(Bigstringaf.length slice) Incomplete ) ;
       on_eof ()
-    | Fail _ -> Lwt.wakeup finished (Rresult.R.error_msgf "bad POST request")
-    | Done (_, v) -> Lwt.wakeup finished (Rresult.R.ok v)
+    | Fail (_, _, err) ->
+      Log.err (fun m -> m "Got an error while parsing multipart: %s" err) ;
+      Lwt.wakeup_later finished (Rresult.R.error_msgf "bad POST request")
+    | Done (_, v) ->
+      Log.debug (fun m -> m "Receive a multipart request.") ;
+      Lwt.wakeup_later finished (Rresult.R.ok v)
   and on_read buf ~off ~len =
     match !state with
     | Partial { continue; committed; } ->
+      Log.debug (fun m -> m "Committed %d byte(s)." committed) ;
       Qe.N.shift_exn ke committed ;
       if committed = 0 then Qe.compress ke ;
       Qe.N.push ke ~blit ~length:Bigstringaf.length ~off ~len buf ;
       Log.debug (fun m -> m "Length of internal queue: %x byte(s)." (Qe.length ke)) ;
-      if Qe.capacity ke >= 0x10000 then Lwt.wakeup finished (Rresult.R.error_msgf "POST buffer is too big!") ;
+      (* if Qe.capacity ke >= 0x10000
+         then Lwt.wakeup_later finished (Rresult.R.error_msgf "POST buffer is too big!") ; *)
       if not (Qe.is_empty ke)
       then ( let[@warning "-8"] slice :: _ = Qe.N.peek ke in
              state := continue slice ~off:0 ~len:(Bigstringaf.length slice) Incomplete ) ;
       Body.schedule_read body ~on_eof ~on_read
-    | Fail _ -> Lwt.wakeup finished (Rresult.R.error_msgf "bad POST request")
-    | Done (_, v) -> Lwt.wakeup finished (Rresult.R.ok v) in
+    | Fail (_, _, err) ->
+      Log.err (fun m -> m "Got an error while parsing multipart: %s" err) ;
+      Lwt.wakeup_later finished (Rresult.R.error_msgf "bad POST request")
+    | Done (_, v) ->
+      Log.debug (fun m -> m "Receive a multipart request.") ;
+      Lwt.wakeup_later finished (Rresult.R.ok v) in
   let open Lwt.Infix in
   Body.schedule_read body ~on_eof ~on_read ;
   thread >>= fun res -> Body.close_reader body ; match res with
