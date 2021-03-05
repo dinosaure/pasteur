@@ -205,7 +205,7 @@ let packages =
   [ package "httpaf"
   ; package "uuidm"
   ; package "tyxml"
-  ; package "git-mirage" ~min:"3.2.0"
+  ; package "git-mirage" ~min:"3.3.1"
   ; package "irmin-mirage-git" ~min:"2.3.0"
   ; package ~sublibs:[ "mirage" ] "dns-certify"
   ; package "multipart_form"
