@@ -1,4 +1,3 @@
-open Lwt.Infix
 open Httpaf
 
 module Option = struct

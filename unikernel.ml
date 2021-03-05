@@ -416,15 +416,12 @@ module Make
       _, _, tls_hostname ->
       Logs.info (fun m -> m "Ready to get the TLS certificate from the DNS service.") ;
       let hostname = Rresult.(R.error_msg_to_invalid_arg Domain_name.(of_string tls_hostname >>= host)) in
-      Some (DNS DLE.{ key= dns_key; port= dns_port; addr= dns_addr; seed= cert_seed; hostname; })
+      Some (DNS { key= dns_key; port= dns_port; addr= dns_addr; seed= cert_seed; hostname; })
     | true, _, _, _, cert_seed, email, account_seed, tls_hostname ->
       Logs.info (fun m -> m "Ready to get the TLS certificate from a local HTTP service.") ;
       let hostname = Rresult.(R.error_msg_to_invalid_arg Domain_name.(of_string tls_hostname >>= host)) in
       let email = Option.bind email (Rresult.R.to_option <.> Emile.of_string) in
-      Some (HTTP LE.{ email; seed= account_seed; certificate_seed= cert_seed; hostname; })
-    | true, _, _, _, _, _, _, _ ->
-      Logs.warn (fun m -> m "Missing arguments to start an HTTP server with TLS.") ;
-      None
+      Some (HTTP { email; seed= account_seed; certificate_seed= cert_seed; hostname; })
     | _ -> None
 
   let pull (store, rd_remote) = Sync.pull store rd_remote `Set >>= function
