@@ -2,31 +2,206 @@
 
 Pasteur is an unikernel (MirageOS) which provides an mini-website to paste
 snippets and save them into a Git repository. The goal of this project is to be
-an example of: how to write an unikernel today?
+an example of: how to write a website as an unikernel today?
 
-This example uses several stacks like the HTTP stack (with [http/af][http-af]),
-the Git stack (with [ocaml-git][ocaml-git]) with [Irmin][irmin] with underlying
-layers - available in the MirageOS organization.
+This example uses several stacks:
+- HTTP with [http/af][http-af] and [paf][paf]
+- Git with [ocaml-git][ocaml-git]
+- Irmin with [irmin][irmin]
+- SSH with [awa][awa]
+- TLS with [ocaml-tls][ocaml-tls]
+- TCP/IP of course with [mirage-tcpip][mirage-tcpip]
+- JavaScript with [`js_of_ocaml`][js-of-ocaml] and [brr][brr]
 
 Design comes from [paste.isomorphis.me][paste].
 
 ## How to use it?
 
-MirageOS let user to choose which backend he wants. So we have 3 generals
+MirageOS lets user to choose which backend he wants. So we have 2 general
 backends:
-- KVM (with Solo5)
-- Unix
-- Xen
+- Unix target (a simple executable as usual)
+- KVM or Xen with [Solo5][solo5]
 
-Currently, the project is tested with the Unix backend - the most easy to
-deploy - and Solo5.
+### The unix backend
+
+The unix backend is the easiest way to deploy pasteur. It does not require
+exotic processes and it requires, at least if you want to use `*:443` or `*:80`,
+the `sudo` access. An extra step is needed: we need to compile the client-side
+of `pasteur` with `js_of_ocaml` (so, yes, the entire _unikernel_ is in OCaml!):
+
+```sh
+$ sudo apt install opam
+$ opam init
+$ opam install mirage brr
+$ git clone https://github.com/dinosaure/pasteur
+$ cd pasteur
+$ cd js
+$ dune build ./pasteur.js
+$ cp pasteur.js ../public/pasteur.js
+$ cd ..
+$ mirage configure
+$ make depends
+$ mirage build
+```
+
+Pasteur has several arguments:
+- *req* `--remote` is the Git remote repository (we are able to pull/push on it)
+- *req* `-h`/`--hostname` is the _hostname_ of the unikernel
+- *opt* `-p`/`--port` is the port of the webserver
+- *opt* `--https` if you want to start an HTTP server with TLS
+  in that case, the unikernel will do the let's encrypt challenge according
+  to some others arguments
+- *opt* `--dns-key`/`--dns-port`/`--dns-addr`: only if you want to do a DNS
+  challenge. In that context, you should take a look on
+  [Deploying an authoritative OCaml DNS server with MirageOS][mirage-dns]
+- *opt* `--email`/`--cert-seed`/`--account-seed`/`--production`: only if
+  you want to do a HTTP challenge. In that context, the unikernel must run under
+  the given `hostname`. It will launch an HTTP server (on `*:80*`) and do the
+  challenge then.
+- *opt* `--ssh-seed` is the seed to re-generate the private RSA key used to
+  pull/push to the given Git repository.
+- *opt* `--ssh-auth` is the fingerprint of the SSH server which allows the Git
+  synchronization
+  
+#### Synchronization with Git via SSH
+
+Pasteur gives your several mechanisms to be synchronized to a Git repository.
+You can use a GitHub repository or a local one with few extra parameters. Let's
+start with a GitHub respository.
+
+The most easy way to synchronize pasteur with GitHub is SSH. About that, you
+must create a new private RSA key:
+```sh
+$ awa_gen_key
+seed is XXX
+ssh-rsa ,,, awa@awa.local
+```
+
+The first line is the seed to be able to reproduce the private RSA key with the
+fortuna random generator. Keep this seed somewhere. The second line is the public
+RSA key which should be paste to your GitHub account (on authorized SSH keys).
+
+Then, we can accept only an SSH connection to GitHub, we will try to get the
+_fingerprint_ of GitHub:
+```sh
+$ ssh-keyscan git-server > /tmp/ssh.pk
+$ ssh-keygen -l -E sha256 -f /tmp/ssh.pk
+2048 SHA256:YYY git-server (RSA)
+```
+
+The fingerprint is `SHA256:...`. Now, we are able to communicate with GitHub:
+```sh
+$ ./pasteur --ssh-seed XXX --ssh-auth=SHA256:YYY --remote git@github.com:username/repo.git
+```
+
+#### Synchronization with Git via TCP/IP
+
+We can decide to use our own Git server. It needs few tweak to be able to push on it:
+```sh
+$ mkdir git-pasteur
+$ cd git-pasteur
+$ git init --bare --shared
+$ git config receive.denyCurrentBranch ignore
+$ git read-tree --empty
+$ FIRST_COMMIT=`git commit-tree $(git write-tree) -m .`
+$ git update-ref "refs/heads/master" $FIRST_COMMIT
+$ cd ..
+```
+
+Then, we are able to launch a Git server
+```sh
+$ git daemon --base-path=. --export-all --reuseaddr --informative-errors --verbose --enable=receive-pack
+```
+
+On the other side, pasteur can be launched with:
+```sh
+$ ./pasteur -r git://localhost/git-pasteur
+```
+
+*NOTE*: such way is not really compatible with Solo5! Indeed, the `git daemon`
+must be launched on a specific IP which can communicate with the _unikernel_.
+Depending on your network topology, `--listen` is needed.
+
+#### Synchronization with Git via HTTP/HTTPS
+
+Currently this way does not really work when we don't have a way to pass a
+_token_ via HTTP/HTTPS. It should not be difficult to implement it!
+
+#### Let's encrypt challenge
+
+If you launch pasteur with `--https`, the _unikernel_ will try to do the let's
+encrypt challenge. Depending on which argument you give to us, we are able to do
+2 kinds of challenge:
+- over DNS
+- over HTTP
+
+The first one is may be more complex. Indeed, it requires a primary DNS server
+(which serves your `--hostname`) and a way to communicate with it. However, it
+fits well with another unikernel: [a primary DNS server with
+MirageOS][mirage-dns].
+
+So if you want to have an other unikernel, you should follow the tutorial. At
+the end, you will have enough informations such as:
+- the DNS IP address and its port (usually `*:53`)
+- your DNS key
+
+*NOTE*: `--production` has no meaning if you use the DNS challenge. Indeed, only
+the `letsencrypt` _unikernel_ has this information.
+
+##### Let's encrypt challenge via HTTP
+
+Otherwise, pasteur can do the challenge via HTTP. However, the unikernel must
+run behind your `--hostname`. In other words, if you want:
+```sh
+$ ./pasteur --hostname zero.bin --https
+```
+
+The _unikernel_ must be accessible on `*:80` (so, with privileges) via
+`http://zero.bin/`. If it's not the case, let's encrypt will be not able to
+create the TLS certificate. You can do some tries with `--production=false`
+before.
+
+You can pass some others informations via HTTP such as:
+- `--cert-seed`
+- `--account-seed`
+- `--email`
+
+### The solo5 backend
+
+Of course, the main purpose of MirageOS is the ability to create a full operating system. About that,
+you can use the Solo5 backend. You just need to reconfigure the _unikernel_ with:
+```sh
+$ mirage configure -t hvt
+$ make depends
+$ mirage build
+```
+
+
+ 
+For most of them, they depends on your context. For example, if your Git
+repository is accessible via SSH, you should define some arguments such as:
+
+- `--ssh-seed` available with `awa` (used by pasteur) and `awa_gen_key`
+
+- `--ssh-auth` available with (on Linux):
+
+```sh
+$ ssh-keyscan git-server > /tmp/ssh.pk
+$ ssh-keygen -l -E sha256 -f /tmp/ssh.pk
+2048 SHA256:... git-server (RSA)
+```
+
+We are interested only by `SHA256:...` as the authenticator of your server
+`git-server`. Of course, the private key (generated by `awa_gen_key`) must be
+allowed by your git server. `awa_gen_key` gives you the public-key which should
+be added to your git server.
 
 ### Unix backend
 
 First, you need to have the MirageOS tool:
 
 ```sh
-$ opam install mirage checkseum.0.0.9 digestif.0.7.4
+$ opam install mirage
 ```
 
 Then, under the repository:
@@ -72,7 +247,7 @@ $ ./main.native
 It listens into 4343, so you can open `http://127.0.0.1:4343` and see your Git
 repository be fed (and updated) by the server.
 
-### Solo5 backend
+### Solo5 backend 
 
 A Solo5 backend of `pasteur` is possible with `mirage configure -t hvt`.
 However, you need to precise:
