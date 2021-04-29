@@ -6,34 +6,11 @@ module Option = struct
   let ( >>= ) = bind
 end
 
-module List = struct
-  include List
-
-  let hd_opt = function x :: _ -> Some x | [] -> None
-end
-
-let formatter_of_body body =
-  let output x off len = Body.write_string body ~off ~len x in
-  let flush () = Body.flush body (fun () -> ()) in
-  Format.make_formatter output flush
-
 let parse_content_type str =
   Multipart_form.Content_type.of_string (str ^ "\r\n")
 
 let extract_content_type request =
-  let exception Found in
-  let headers = request.Request.headers in
-  let content_type = ref None in
-  try
-    List.iter
-      (fun (field_name, v) -> match String.lowercase_ascii field_name with
-         | "content-type" ->
-           ( match parse_content_type v with
-             | Ok v -> content_type := Some v ; raise Found
-             | _ -> () )
-         | _ -> ())
-      (Headers.to_list headers) ; None
-  with Found -> !content_type
+  Headers.get request.Request.headers "content-type"
 
 type key = Paste | User | Comment | Ln | Raw | Hl | Encrypted
 
@@ -58,68 +35,27 @@ let string_of_key = function
   | Paste -> "paste" | User -> "user" | Comment -> "comment" | Ln -> "ln"
   | Raw -> "raw" | Hl -> "hl" | Encrypted -> "encrypted"
 
-let pp_string ppf x = Fmt.pf ppf "%S" x
-let blit src src_off dst dst_off len = Bigstringaf.blit src ~src_off dst ~dst_off ~len
-
-module Qe = Ke.Rke
 let src = Logs.Src.create "multipart"
 module Log = (val Logs.src_log src : Logs.LOG)
 
+let ( >|? ) f x = Lwt_result.map x f
+let ( >>? ) = Lwt_result.bind
+
 let extract_parts content_type body =
-  let open Angstrom.Unbuffered in
-
-  let hashtbl = Hashtbl.create 7 in
-  let emitters header = 
-    match get_key header with
-    | Some key ->
-      let stream, push = Lwt_stream.create () in
-      Hashtbl.add hashtbl key stream ; push, Some key
-    | None -> (fun _ -> ()), None in
-
-  let thread, finished = Lwt.task () in
-  let state = ref (parse (Multipart_form.parser ~emitters content_type)) in
-  let ke = Qe.create ~capacity:0x1000 Bigarray.Char in
-
-  let rec on_eof () =
-    match !state with
-    | Partial { continue; committed; } ->
-      Qe.N.shift_exn ke committed ;
-      if committed = 0 then Qe.compress ke ;
-      ( match Qe.N.peek ke with
-        | [] -> state := continue Bigstringaf.empty ~off:0 ~len:0 Complete
-        | [ slice ] -> state := continue slice ~off:0 ~len:(Bigstringaf.length slice) Complete
-        | slice :: _ -> state := continue slice ~off:0 ~len:(Bigstringaf.length slice) Incomplete ) ;
-      on_eof ()
-    | Fail (_, _, err) ->
-      Log.err (fun m -> m "Got an error while parsing multipart: %s" err) ;
-      Lwt.wakeup_later finished (Rresult.R.error_msgf "bad POST request")
-    | Done (_, v) ->
-      Log.debug (fun m -> m "Receive a multipart request.") ;
-      Lwt.wakeup_later finished (Rresult.R.ok v)
-  and on_read buf ~off ~len =
-    match !state with
-    | Partial { continue; committed; } ->
-      Log.debug (fun m -> m "Committed %d byte(s)." committed) ;
-      Qe.N.shift_exn ke committed ;
-      if committed = 0 then Qe.compress ke ;
-      Qe.N.push ke ~blit ~length:Bigstringaf.length ~off ~len buf ;
-      Log.debug (fun m -> m "Length of internal queue: %x byte(s)." (Qe.length ke)) ;
-      (* if Qe.capacity ke >= 0x10000
-         then Lwt.wakeup_later finished (Rresult.R.error_msgf "POST buffer is too big!") ; *)
-      if not (Qe.is_empty ke)
-      then ( let[@warning "-8"] slice :: _ = Qe.N.peek ke in
-             state := continue slice ~off:0 ~len:(Bigstringaf.length slice) Incomplete ) ;
-      Body.schedule_read body ~on_eof ~on_read
-    | Fail (_, _, err) ->
-      Log.err (fun m -> m "Got an error while parsing multipart: %s" err) ;
-      Lwt.wakeup_later finished (Rresult.R.error_msgf "bad POST request")
-    | Done (_, v) ->
-      Log.debug (fun m -> m "Receive a multipart request.") ;
-      Lwt.wakeup_later finished (Rresult.R.ok v) in
-  let open Lwt.Infix in
+  let stream, pusher = Lwt_stream.create () in
+  let rec on_read buf ~off ~len =
+    Log.debug (fun m -> m "Read %d byte(s) from the body." len) ;
+    let str = Bigstringaf.substring buf ~off ~len in
+    pusher (Some str) ;
+    Body.schedule_read body ~on_eof ~on_read
+  and on_eof () =
+    Log.debug (fun m -> m "End of body.") ;
+    pusher None ;
+    Body.close_reader body in
   Body.schedule_read body ~on_eof ~on_read ;
-  thread >>= fun res -> Body.close_reader body ; match res with
-  | Error _ as err -> Lwt.return err
-  | Ok _ ->
-    let lst = Hashtbl.fold (fun k s a -> (k, Lwt_stream.to_list s) :: a) hashtbl [] in
-    Lwt_list.map_p (fun (k, t) -> t >|= fun v -> (k, String.concat "" v)) lst >|= Rresult.R.ok
+  Multipart_form_lwt.of_stream_to_tree stream content_type >>? fun tree ->
+  Log.debug (fun m -> m "Got the tree from the multipart/form-data stream.") ;
+  Lwt.return_ok (Multipart_form.flatten tree) >|?
+  List.fold_left (fun acc { Multipart_form.header; body; } -> match get_key header with
+    | Some key -> (key, body) :: acc
+    | None -> acc) []

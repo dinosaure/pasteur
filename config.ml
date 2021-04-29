@@ -2,6 +2,8 @@
 
 open Mirage
 
+(* [mimic] stuffs. *)
+
 type mimic = Mimic
 
 let mimic = typ Mimic
@@ -27,11 +29,13 @@ let mimic_conf () =
 
 let merge ctx0 ctx1 = mimic_conf () $ ctx0 $ ctx1
 
+(* [tcp] connector. *)
+
 let mimic_tcp_conf =
   let packages = [ package "git-mirage" ~sublibs:[ "tcp" ] ] in
   impl @@ object
        inherit base_configurable
-       method ty = stackv4 @-> mimic
+       method ty = stackv4v6 @-> mimic
        method module_name = "Git_mirage_tcp.Make"
        method! packages = Key.pure packages
        method name = "tcp_ctx"
@@ -42,7 +46,9 @@ let mimic_tcp_conf =
          | _ -> assert false
      end
 
-let mimic_tcp_impl stackv4 = mimic_tcp_conf $ stackv4
+let mimic_tcp_impl stackv4v6 = mimic_tcp_conf $ stackv4v6
+
+(* [ssh] connector. *)
 
 let mimic_ssh_conf ~kind ~seed ~auth =
   let seed = Key.abstract seed in
@@ -50,7 +56,7 @@ let mimic_ssh_conf ~kind ~seed ~auth =
   let packages = [ package "git-mirage" ~sublibs:[ "ssh" ] ] in
   impl @@ object
        inherit base_configurable
-       method ty = stackv4 @-> mimic @-> mclock @-> mimic
+       method ty = stackv4v6 @-> mimic @-> mclock @-> mimic
        method! keys = [ seed; auth; ]
        method module_name = "Git_mirage_ssh.Make"
        method! packages = Key.pure packages
@@ -76,19 +82,16 @@ let mimic_ssh_conf ~kind ~seed ~auth =
          | _ -> assert false
      end
 
-let mimic_ssh_impl ~kind ~seed ~auth stackv4 mimic_git mclock =
-  mimic_ssh_conf ~kind ~seed ~auth
-  $ stackv4
-  $ mimic_git
-  $ mclock
+let mimic_ssh_impl ~kind ~seed ~auth stackv4v6 mimic_git mclock =
+  mimic_ssh_conf ~kind ~seed ~auth $ stackv4v6 $ mimic_git $ mclock
 
-(* TODO(dinosaure): user-defined nameserver and port. *)
+(* [dns] connector. *)
 
 let mimic_dns_conf =
   let packages = [ package "git-mirage" ~sublibs:[ "dns" ] ] in
   impl @@ object
        inherit base_configurable
-       method ty = random @-> mclock @-> time @-> stackv4 @-> mimic @-> mimic
+       method ty = random @-> mclock @-> time @-> stackv4v6 @-> mimic @-> mimic
        method module_name = "Git_mirage_dns.Make"
        method! packages = Key.pure packages
        method name = "dns_ctx"
@@ -104,8 +107,73 @@ let mimic_dns_conf =
          | _ -> assert false
      end
 
-let mimic_dns_impl random mclock time stackv4 mimic_tcp =
-  mimic_dns_conf $ random $ mclock $ time $ stackv4 $ mimic_tcp
+let mimic_dns_impl random mclock time stackv4v6 mimic_tcp =
+  mimic_dns_conf $ random $ mclock $ time $ stackv4v6 $ mimic_tcp
+
+(* [docteur] file-system. *)
+
+let docteur_solo5 ~name directory =
+  impl @@ object
+       inherit base_configurable
+       method ty = kv_ro
+       method name = Fmt.str "docteur-%s" name
+       method module_name = Fmt.str "Docteur_solo5.Fast"
+       method! keys = [ Key.abstract directory ]
+       method! packages = Key.pure [ package "docteur" ~sublibs:[ "solo5" ] ]
+       method! configure _info =
+         Hashtbl.add Mirage_impl_block.all_blocks name
+           { Mirage_impl_block.filename= name; number= 0 } ;
+         Ok ()
+       method! build info =
+         let ctx = Info.context info in
+         let directory = match Key.get ctx directory with
+           | Some path -> Fpath.v path
+           | None -> Fpath.(Rresult.R.get_ok (Bos.OS.Dir.current ()) / "public") in
+         Bos.OS.Cmd.run Bos.Cmd.(v "docteur.make" % Fmt.str "file://%a/" Fpath.pp directory % Fmt.str "%s.img" name)
+       method! connect _ modname _ =
+         Fmt.str
+           {ocaml|let ( <.> ) f g = fun x -> f (g x) in
+                  let f = Rresult.R.(failwith_error_msg <.> reword_error (msgf "%%a" %s.pp_error)) in
+                  Lwt.map f (%s.connect %S)|ocaml}
+           modname modname name
+     end
+
+let docteur_unix ~name directory =
+  impl @@ object
+       inherit base_configurable
+       method ty = kv_ro
+       method name = Fmt.str "docteur-%s" name
+       method module_name = Fmt.str "Docteur_unix.Fast"
+       method! keys = [ Key.abstract directory ]
+       method! packages = Key.pure [ package "docteur" ~sublibs:[ "unix" ] ]
+       method! configure _info =
+         Hashtbl.add Mirage_impl_block.all_blocks name
+           { Mirage_impl_block.filename= name; number= 0 } ;
+         Ok ()
+       method! build info =
+         let ctx = Info.context info in
+         let directory = match Key.get ctx directory with
+           | Some path -> Fpath.v path
+           | None -> Fpath.(Rresult.R.get_ok (Bos.OS.Dir.current ()) / "public") in
+         Bos.OS.Cmd.run Bos.Cmd.(v "docteur.make" % Fmt.str "file://%a/" Fpath.pp directory % Fmt.str "%s.img" name)
+       method! connect _ modname _ =
+         Fmt.str
+           {ocaml|let ( <.> ) f g = fun x -> f (g x) in
+                  let f = Rresult.R.(failwith_error_msg <.> reword_error (msgf "%%a" %s.pp_error)) in
+                  Lwt.map f (%s.connect %S)|ocaml}
+           modname modname (name ^ ".img")
+     end
+
+let docteur ~name directory =
+  match_impl Key.(value target)
+    [ (`Unix,   docteur_unix ~name directory)
+    ; (`MacOSX, docteur_unix ~name directory)
+    ; (`Hvt,    docteur_solo5 ~name directory)
+    ; (`Spt,    docteur_solo5 ~name directory)
+    ; (`Virtio, docteur_solo5 ~name directory)
+    ; (`Muen,   docteur_solo5 ~name directory)
+    ; (`Genode, docteur_solo5 ~name directory) ]
+    ~default:(docteur_unix ~name directory)
 
 let remote =
   let doc = Key.Arg.info ~doc:"Remote Git repository." [ "r"; "remote" ] in
@@ -125,7 +193,7 @@ let dns_port =
 
 let dns_addr =
   let doc = Key.Arg.info ~doc:"DNS server." [ "dns-server" ] in
-  Key.(create "dns_addr" Arg.(opt (some ipv4_address) None doc))
+  Key.(create "dns_addr" Arg.(opt (some ip_address) None doc))
 
 let email =
   let doc = Key.Arg.info ~doc:"Let's encrypt email." [ "email" ] in
@@ -163,6 +231,10 @@ let https =
   let doc = Key.Arg.info ~doc:"Start an HTTP server with a TLS certificate." [ "https" ] in
   Key.(create "https" Arg.(opt bool false doc))
 
+let local =
+  let doc = Key.Arg.info ~doc:"Local directory which contains *.js and *.css files." [ "local" ] in
+  Key.(create "local" Arg.(opt (some string) None doc))
+
 let pasteur =
   foreign "Unikernel.Make"
     ~keys:[ Key.abstract remote
@@ -179,37 +251,32 @@ let pasteur =
           ; Key.abstract cert_seed
           ; Key.abstract account_seed
           ; Key.abstract production ]
-    (random @-> console @-> time @-> mclock @-> pclock @-> kv_ro
-     @-> mimic
-     @-> stackv4 @-> stackv4v6 @-> job)
+    (random @-> console @-> time @-> mclock @-> pclock @-> kv_ro @-> mimic @-> stackv4v6 @-> job)
 
-let mimic ~kind ~seed ~auth stackv4 random mclock time =
-  let mtcp = mimic_tcp_impl stackv4 in
-  let mdns = mimic_dns_impl random mclock time stackv4 mtcp in
-  let mssh = mimic_ssh_impl ~kind ~seed ~auth stackv4 mtcp mclock in
+let mimic ~kind ~seed ~auth stackv4v6 random mclock time =
+  let mtcp = mimic_tcp_impl stackv4v6 in
+  let mdns = mimic_dns_impl random mclock time stackv4v6 mtcp in
+  let mssh = mimic_ssh_impl ~kind ~seed ~auth stackv4v6 mtcp mclock in
   merge mssh mdns
 
 let random = default_random
 let mclock = default_monotonic_clock
+let pclock = default_posix_clock
 let time = default_time
-let stackv4 = generic_stackv4 default_network
 let stack = generic_stackv4v6 default_network
-let conduit = conduit_direct ~tls:true stackv4
-let resolver = resolver_dns stackv4
+let resolver = resolver_dns stack
 let console = console
-let public = generic_kv_ro "public"
+let local = docteur ~name:"public" local
 
-let mimic = mimic ~kind:`Rsa ~seed:ssh_seed ~auth:ssh_auth stackv4 random mclock time
+let mimic = mimic ~kind:`Rsa ~seed:ssh_seed ~auth:ssh_auth stack random mclock time
 
 let packages =
-  [ package "httpaf"
-  ; package "uuidm"
+  [ package "uuidm"
   ; package "tyxml"
-  ; package "git-mirage" ~min:"3.3.1"
-  ; package "irmin-mirage-git" ~min:"2.3.0"
+  ; package "irmin-mirage-git" ~min:"2.5.3"
   ; package ~sublibs:[ "mirage" ] "dns-certify"
-  ; package "multipart_form"
-  ; package "paf"
+  ; package "multipart_form" ~sublibs:[ "lwt" ] ~min:"0.2.0"
+  ; package "paf" ~min:"0.3.0"
   ; package "ocplib-json-typed"
   ; package "ezjsonm"
   ; package ~sublibs:[ "le" ] "paf" ]
@@ -217,6 +284,4 @@ let packages =
 let () =
   register "pasteur"
     ~packages
-    [ pasteur $ random $ default_console $ time $ mclock $ default_posix_clock $ public
-      $ mimic
-      $ stackv4 $ stack ]
+    [ pasteur $ random $ default_console $ time $ mclock $ pclock $ local $ mimic $ stack ]
