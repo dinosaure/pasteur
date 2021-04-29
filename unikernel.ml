@@ -326,8 +326,8 @@ module Make
 
   let post random store remote reqd =
     match extract_content_type (Reqd.request reqd) with
-    | None -> assert false (* TODO: redirect to INDEX. *)
-    | Some content_type ->
+    | Error _ -> assert false (* TODO: redirect to INDEX. *)
+    | Ok content_type ->
       Logs.debug (fun m -> m "Start to extract multipart/form-data.") ;
       let body = Reqd.request_body reqd in
       extract_parts content_type body >>= function

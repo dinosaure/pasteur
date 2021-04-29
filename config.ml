@@ -12,75 +12,50 @@ let mimic_count =
   let v = ref (-1) in
   fun () -> incr v ; !v
 
-let mimic_conf () =
+let mimic_conf =
   let packages = [ package "mimic" ] in
-  impl @@ object
-       inherit base_configurable
-       method ty = mimic @-> mimic @-> mimic
-       method module_name = "Mimic.Merge"
-       method! packages = Key.pure packages
-       method name = Fmt.str "merge_ctx%02d" (mimic_count ())
-       method! connect _ _modname =
-         function
-         | [ a; b ] -> Fmt.str "Lwt.return (Mimic.merge %s %s)" a b
-         | [ x ] -> Fmt.str "%s.ctx" x
-         | _ -> Fmt.str "Lwt.return Mimic.empty"
-     end
+  let connect _ _modname = function
+    | [ a; b ] -> Fmt.str "Lwt.return (Mimic.merge %s %s)" a b
+    | [ x ] -> Fmt.str "%s.ctx" x
+    | _ -> Fmt.str "Lwt.return Mimic.empty" in
+  impl ~packages ~connect "Mimic.Merge" (mimic @-> mimic @-> mimic)
 
-let merge ctx0 ctx1 = mimic_conf () $ ctx0 $ ctx1
+let merge ctx0 ctx1 = mimic_conf $ ctx0 $ ctx1
 
 (* [tcp] connector. *)
 
 let mimic_tcp_conf =
   let packages = [ package "git-mirage" ~sublibs:[ "tcp" ] ] in
-  impl @@ object
-       inherit base_configurable
-       method ty = stackv4v6 @-> mimic
-       method module_name = "Git_mirage_tcp.Make"
-       method! packages = Key.pure packages
-       method name = "tcp_ctx"
-       method! connect _ modname = function
-         | [ stack ] ->
-           Fmt.str {ocaml|Lwt.return (%s.with_stack %s %s.ctx)|ocaml}
-             modname stack modname
-         | _ -> assert false
-     end
+  let connect _ modname = function
+    | [ stack ] ->
+      Fmt.str {ocaml|Lwt.return (%s.with_stack %s %s.ctx)|ocaml}
+        modname stack modname
+    | _ -> assert false in
+  impl ~packages ~connect "Git_mirage_tcp.Make" (stackv4v6 @-> mimic)
 
 let mimic_tcp_impl stackv4v6 = mimic_tcp_conf $ stackv4v6
 
 (* [ssh] connector. *)
 
 let mimic_ssh_conf ~kind ~seed ~auth =
-  let seed = Key.abstract seed in
-  let auth = Key.abstract auth in
+  let seed = Key.v seed in
+  let auth = Key.v auth in
   let packages = [ package "git-mirage" ~sublibs:[ "ssh" ] ] in
-  impl @@ object
-       inherit base_configurable
-       method ty = stackv4v6 @-> mimic @-> mclock @-> mimic
-       method! keys = [ seed; auth; ]
-       method module_name = "Git_mirage_ssh.Make"
-       method! packages = Key.pure packages
-       method name = match kind with
-         | `Rsa -> "ssh_rsa_ctx"
-         | `Ed25519 -> "ssh_ed25519_ctx"
-       method! connect _ modname =
-         function
-         | [ _; tcp_ctx; _ ] ->
-             let with_key =
-               match kind with
-               | `Rsa -> "with_rsa_key"
-               | `Ed25519 -> "with_ed25519_key"
-             in
-             Fmt.str
-               {ocaml|let ssh_ctx00 = Mimic.merge %s %s.ctx in
-                      let ssh_ctx01 = Option.fold ~none:ssh_ctx00 ~some:(fun v -> %s.%s v ssh_ctx00) %a in
-                      let ssh_ctx02 = Option.fold ~none:ssh_ctx01 ~some:(fun v -> %s.with_authenticator v ssh_ctx01) %a in
-                      Lwt.return ssh_ctx02|ocaml}
-               tcp_ctx modname
-               modname with_key Key.serialize_call seed
-               modname Key.serialize_call auth
-         | _ -> assert false
-     end
+  let connect _ modname = function
+    | [ _; tcp_ctx; _ ] ->
+        let with_key = match kind with
+          | `Rsa -> "with_rsa_key"
+          | `Ed25519 -> "with_ed25519_key" in
+        Fmt.str
+          {ocaml|let ssh_ctx00 = Mimic.merge %s %s.ctx in
+                 let ssh_ctx01 = Option.fold ~none:ssh_ctx00 ~some:(fun v -> %s.%s v ssh_ctx00) %a in
+                 let ssh_ctx02 = Option.fold ~none:ssh_ctx01 ~some:(fun v -> %s.with_authenticator v ssh_ctx01) %a in
+                 Lwt.return ssh_ctx02|ocaml}
+          tcp_ctx modname
+          modname with_key Key.serialize_call seed
+          modname Key.serialize_call auth
+    | _ -> assert false in
+  impl ~packages ~connect ~keys:[ seed; auth; ] "Git_mirage_ssh.Make" (stackv4v6 @-> mimic @-> mclock @-> mimic)
 
 let mimic_ssh_impl ~kind ~seed ~auth stackv4v6 mimic_git mclock =
   mimic_ssh_conf ~kind ~seed ~auth $ stackv4v6 $ mimic_git $ mclock
@@ -89,23 +64,16 @@ let mimic_ssh_impl ~kind ~seed ~auth stackv4v6 mimic_git mclock =
 
 let mimic_dns_conf =
   let packages = [ package "git-mirage" ~sublibs:[ "dns" ] ] in
-  impl @@ object
-       inherit base_configurable
-       method ty = random @-> mclock @-> time @-> stackv4v6 @-> mimic @-> mimic
-       method module_name = "Git_mirage_dns.Make"
-       method! packages = Key.pure packages
-       method name = "dns_ctx"
-       method! connect _ modname =
-         function
-         | [ _; _; _; stack; tcp_ctx ] ->
-             Fmt.str
-               {ocaml|let dns_ctx00 = Mimic.merge %s %s.ctx in
-                      let dns_ctx01 = %s.with_dns %s dns_ctx00 in
-                      Lwt.return dns_ctx01|ocaml}
-               tcp_ctx modname
-               modname stack
-         | _ -> assert false
-     end
+  let connect _ modname = function
+    | [ _; _; _; stack; tcp_ctx ] ->
+        Fmt.str
+          {ocaml|let dns_ctx00 = Mimic.merge %s %s.ctx in
+                 let dns_ctx01 = %s.with_dns %s dns_ctx00 in
+                 Lwt.return dns_ctx01|ocaml}
+          tcp_ctx modname
+          modname stack
+    | _ -> assert false in
+  impl ~packages ~connect "Git_mirage_dns.Make" (random @-> mclock @-> time @-> stackv4v6 @-> mimic @-> mimic)
 
 let mimic_dns_impl random mclock time stackv4v6 mimic_tcp =
   mimic_dns_conf $ random $ mclock $ time $ stackv4v6 $ mimic_tcp
@@ -113,56 +81,56 @@ let mimic_dns_impl random mclock time stackv4v6 mimic_tcp =
 (* [docteur] file-system. *)
 
 let docteur_solo5 ~name directory =
-  impl @@ object
-       inherit base_configurable
-       method ty = kv_ro
-       method name = Fmt.str "docteur-%s" name
-       method module_name = Fmt.str "Docteur_solo5.Fast"
-       method! keys = [ Key.abstract directory ]
-       method! packages = Key.pure [ package "docteur" ~sublibs:[ "solo5" ] ]
-       method! configure _info =
-         Hashtbl.add Mirage_impl_block.all_blocks name
-           { Mirage_impl_block.filename= name; number= 0 } ;
-         Ok ()
-       method! build info =
-         let ctx = Info.context info in
-         let directory = match Key.get ctx directory with
-           | Some path -> Fpath.v path
-           | None -> Fpath.(Rresult.R.get_ok (Bos.OS.Dir.current ()) / "public") in
-         Bos.OS.Cmd.run Bos.Cmd.(v "docteur.make" % Fmt.str "file://%a/" Fpath.pp directory % Fmt.str "%s.img" name)
-       method! connect _ modname _ =
-         Fmt.str
-           {ocaml|let ( <.> ) f g = fun x -> f (g x) in
-                  let f = Rresult.R.(failwith_error_msg <.> reword_error (msgf "%%a" %s.pp_error)) in
-                  Lwt.map f (%s.connect %S)|ocaml}
-           modname modname name
-     end
+  let packages = [ package "docteur" ~sublibs:[ "solo5" ] ] in
+  let dune info =
+    let ctx = Info.context info in
+    let directory = match Key.get ctx directory with
+      | Some path -> Fpath.v path
+      | None -> Fpath.(v (Sys.getcwd ()) / "public") in
+    let dune = Dune.stanzaf
+      {dune|(rule
+             (target %s.img)
+             (deps (source_tree %a))
+             (action (run docteur.make file://%a/ %s.img)))|dune}
+      name Fpath.pp directory Fpath.pp directory name in
+    [ dune ] in
+  let configure _info =
+    Hashtbl.add Mirage_impl_block.all_blocks
+      name { Mirage_impl_block.filename= name; number= 0; } ;
+    Action.ok () in
+  let connect _ modname _ =
+    Fmt.str
+      {ocaml|let ( <.> ) f g = fun x -> f (g x) in
+             let f = Rresult.R.(failwith_error_msg <.> reword_error (msgf "%%a" %s.pp_error)) in
+             Lwt.map f (%s.connect %S)|ocaml}
+      modname modname name in
+  impl ~configure ~packages ~dune ~connect ~keys:[ Key.v directory ] "Docteur_solo5.Fast" kv_ro
 
 let docteur_unix ~name directory =
-  impl @@ object
-       inherit base_configurable
-       method ty = kv_ro
-       method name = Fmt.str "docteur-%s" name
-       method module_name = Fmt.str "Docteur_unix.Fast"
-       method! keys = [ Key.abstract directory ]
-       method! packages = Key.pure [ package "docteur" ~sublibs:[ "unix" ] ]
-       method! configure _info =
-         Hashtbl.add Mirage_impl_block.all_blocks name
-           { Mirage_impl_block.filename= name; number= 0 } ;
-         Ok ()
-       method! build info =
-         let ctx = Info.context info in
-         let directory = match Key.get ctx directory with
-           | Some path -> Fpath.v path
-           | None -> Fpath.(Rresult.R.get_ok (Bos.OS.Dir.current ()) / "public") in
-         Bos.OS.Cmd.run Bos.Cmd.(v "docteur.make" % Fmt.str "file://%a/" Fpath.pp directory % Fmt.str "%s.img" name)
-       method! connect _ modname _ =
-         Fmt.str
-           {ocaml|let ( <.> ) f g = fun x -> f (g x) in
-                  let f = Rresult.R.(failwith_error_msg <.> reword_error (msgf "%%a" %s.pp_error)) in
-                  Lwt.map f (%s.connect %S)|ocaml}
-           modname modname (name ^ ".img")
-     end
+  let packages = [ package "docteur" ~sublibs:[ "unix" ] ] in
+  let dune info =
+    let ctx = Info.context info in
+    let directory = match Key.get ctx directory with
+      | Some path -> Fpath.v path
+      | None -> Fpath.(v (Sys.getcwd ()) / "public") in
+    let dune = Dune.stanzaf
+      {dune|(rule
+             (target %s.img)
+             (deps (source_tree %a))
+             (action (run docteur.make file://%a/ %s.img)))|dune}
+      name Fpath.pp directory Fpath.pp directory name in
+    [ dune ] in
+  let configure _info =
+    Hashtbl.add Mirage_impl_block.all_blocks
+      name { Mirage_impl_block.filename= name; number= 0; } ;
+    Action.ok () in
+  let connect _ modname _ =
+    Fmt.str
+      {ocaml|let ( <.> ) f g = fun x -> f (g x) in
+             let f = Rresult.R.(failwith_error_msg <.> reword_error (msgf "%%a" %s.pp_error)) in
+             Lwt.map f (%s.connect %S)|ocaml}
+      modname modname (name ^ ".img") in
+  impl ~configure ~packages ~dune ~connect ~keys:[ Key.v directory ] "Docteur_unix.Fast" kv_ro
 
 let docteur ~name directory =
   match_impl Key.(value target)
@@ -174,6 +142,8 @@ let docteur ~name directory =
     ; (`Muen,   docteur_solo5 ~name directory)
     ; (`Genode, docteur_solo5 ~name directory) ]
     ~default:(docteur_unix ~name directory)
+
+(* [resolver] device. *)
 
 let remote =
   let doc = Key.Arg.info ~doc:"Remote Git repository." [ "r"; "remote" ] in
@@ -233,24 +203,24 @@ let https =
 
 let local =
   let doc = Key.Arg.info ~doc:"Local directory which contains *.js and *.css files." [ "local" ] in
-  Key.(create "local" Arg.(opt (some string) None doc))
+  Key.(create "local" Arg.(required ~stage:`Configure string doc))
 
 let pasteur =
   foreign "Unikernel.Make"
-    ~keys:[ Key.abstract remote
-          ; Key.abstract port
-          ; Key.abstract https
-          ; Key.abstract dns_key
-          ; Key.abstract dns_addr
-          ; Key.abstract dns_port
-          ; Key.abstract ssh_seed
-          ; Key.abstract ssh_auth
-          ; Key.abstract email
-          ; Key.abstract hostname
-          ; Key.abstract random_len
-          ; Key.abstract cert_seed
-          ; Key.abstract account_seed
-          ; Key.abstract production ]
+    ~keys:[ Key.v remote
+          ; Key.v port
+          ; Key.v https
+          ; Key.v dns_key
+          ; Key.v dns_addr
+          ; Key.v dns_port
+          ; Key.v ssh_seed
+          ; Key.v ssh_auth
+          ; Key.v email
+          ; Key.v hostname
+          ; Key.v random_len
+          ; Key.v cert_seed
+          ; Key.v account_seed
+          ; Key.v production ]
     (random @-> console @-> time @-> mclock @-> pclock @-> kv_ro @-> mimic @-> stackv4v6 @-> job)
 
 let mimic ~kind ~seed ~auth stackv4v6 random mclock time =
@@ -264,7 +234,6 @@ let mclock = default_monotonic_clock
 let pclock = default_posix_clock
 let time = default_time
 let stack = generic_stackv4v6 default_network
-let resolver = resolver_dns stack
 let console = console
 let local = docteur ~name:"public" local
 
