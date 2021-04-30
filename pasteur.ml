@@ -6,11 +6,10 @@ module Option = struct
   let ( >>= ) = bind
 end
 
-let parse_content_type str =
-  Multipart_form.Content_type.of_string (str ^ "\r\n")
-
 let extract_content_type request =
-  Headers.get request.Request.headers "content-type"
+  match Headers.get request.Request.headers "content-type" with
+  | Some v -> Multipart_form.Content_type.of_string (v ^ "\r\n")
+  | None -> Rresult.R.error_msgf "Content-Type field not found"
 
 type key = Paste | User | Comment | Ln | Raw | Hl | Encrypted
 

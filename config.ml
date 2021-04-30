@@ -112,7 +112,7 @@ let mimic_dns_impl random mclock time stackv4v6 mimic_tcp =
 
 (* [docteur] file-system. *)
 
-let docteur_solo5 ~name directory =
+let docteur_solo5 ~name directory () =
   impl @@ object
        inherit base_configurable
        method ty = kv_ro
@@ -138,7 +138,7 @@ let docteur_solo5 ~name directory =
            modname modname name
      end
 
-let docteur_unix ~name directory =
+let docteur_unix ~name directory () =
   impl @@ object
        inherit base_configurable
        method ty = kv_ro
@@ -165,15 +165,15 @@ let docteur_unix ~name directory =
      end
 
 let docteur ~name directory =
-  match_impl Key.(value target)
-    [ (`Unix,   docteur_unix ~name directory)
-    ; (`MacOSX, docteur_unix ~name directory)
-    ; (`Hvt,    docteur_solo5 ~name directory)
-    ; (`Spt,    docteur_solo5 ~name directory)
-    ; (`Virtio, docteur_solo5 ~name directory)
-    ; (`Muen,   docteur_solo5 ~name directory)
-    ; (`Genode, docteur_solo5 ~name directory) ]
-    ~default:(docteur_unix ~name directory)
+  let choose = function
+    | #Key.mode_unix -> `Unix
+    | #Key.mode_solo5 -> `Solo5
+    | _ -> failwith "Xen is not supported" in
+  let v = Key.(pure choose $ (value target)) in
+  match_impl v
+    [ (`Solo5, docteur_solo5 ~name directory ())
+    ; (`Unix,  docteur_unix  ~name directory ()) ]
+    ~default:(docteur_unix ~name directory ())
 
 let remote =
   let doc = Key.Arg.info ~doc:"Remote Git repository." [ "r"; "remote" ] in
@@ -233,7 +233,7 @@ let https =
 
 let local =
   let doc = Key.Arg.info ~doc:"Local directory which contains *.js and *.css files." [ "local" ] in
-  Key.(create "local" Arg.(opt (some string) None doc))
+  Key.(create "local" Arg.(required ~stage:`Configure string doc))
 
 let pasteur =
   foreign "Unikernel.Make"
@@ -266,7 +266,6 @@ let time = default_time
 let stack = generic_stackv4v6 default_network
 let resolver = resolver_dns stack
 let console = console
-let local = docteur ~name:"public" local
 
 let mimic = mimic ~kind:`Rsa ~seed:ssh_seed ~auth:ssh_auth stack random mclock time
 
@@ -276,7 +275,7 @@ let packages =
   ; package "irmin-mirage-git" ~min:"2.5.3"
   ; package ~sublibs:[ "mirage" ] "dns-certify"
   ; package "multipart_form" ~sublibs:[ "lwt" ] ~min:"0.2.0"
-  ; package "paf" ~min:"0.3.0"
+  ; package "paf" ~min:"0.0.3"
   ; package "ocplib-json-typed"
   ; package "ezjsonm"
   ; package ~sublibs:[ "le" ] "paf" ]
@@ -284,4 +283,4 @@ let packages =
 let () =
   register "pasteur"
     ~packages
-    [ pasteur $ random $ default_console $ time $ mclock $ pclock $ local $ mimic $ stack ]
+    [ pasteur $ random $ default_console $ time $ mclock $ pclock $ docteur ~name:"public" local $ mimic $ stack ]
