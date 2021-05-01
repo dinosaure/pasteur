@@ -81,18 +81,20 @@ let mimic_dns_impl random mclock time stackv4v6 mimic_tcp =
 (* [docteur] file-system. *)
 
 let docteur_solo5 ~name directory =
-  let packages = [ package "docteur" ~sublibs:[ "solo5" ] ] in
+  let packages = [ package "docteur-solo5" ] in
   let dune info =
     let ctx = Info.context info in
-    let directory = match Key.get ctx directory with
-      | Some path -> Fpath.v path
-      | None -> Fpath.(v (Sys.getcwd ()) / "public") in
+    let cwd = Fpath.v (Sys.getcwd ()) in
+    let rel, abs = match Key.get ctx directory with
+      | Some path when Fpath.is_rel (Fpath.v path) -> Fpath.v path, Fpath.(cwd / path)
+      | Some path -> Option.get (Fpath.relativize ~root:cwd (Fpath.v path)), Fpath.v path
+      | None -> Fpath.v "./public/", Fpath.(v (Sys.getcwd ()) / "public") in
     let dune = Dune.stanzaf
       {dune|(rule
              (target %s.img)
              (deps (source_tree %a))
              (action (run docteur.make file://%a/ %s.img)))|dune}
-      name Fpath.pp directory Fpath.pp directory name in
+      name Fpath.pp rel Fpath.pp abs name in
     [ dune ] in
   let configure _info =
     Hashtbl.add Mirage_impl_block.all_blocks
@@ -107,18 +109,20 @@ let docteur_solo5 ~name directory =
   impl ~configure ~packages ~dune ~connect ~keys:[ Key.v directory ] "Docteur_solo5.Fast" kv_ro
 
 let docteur_unix ~name directory =
-  let packages = [ package "docteur" ~sublibs:[ "unix" ] ] in
+  let packages = [ package "docteur-unix" ] in
   let dune info =
     let ctx = Info.context info in
-    let directory = match Key.get ctx directory with
-      | Some path -> Fpath.v path
-      | None -> Fpath.(v (Sys.getcwd ()) / "public") in
+    let cwd = Fpath.v (Sys.getcwd ()) in
+    let rel, abs = match Key.get ctx directory with
+      | Some path when Fpath.is_rel (Fpath.v path) -> Fpath.v path, Fpath.(cwd / path)
+      | Some path -> Option.get (Fpath.relativize ~root:cwd (Fpath.v path)), Fpath.v path
+      | None -> Fpath.v "./public/", Fpath.(v (Sys.getcwd ()) / "public") in
     let dune = Dune.stanzaf
       {dune|(rule
              (target %s.img)
              (deps (source_tree %a))
              (action (run docteur.make file://%a/ %s.img)))|dune}
-      name Fpath.pp directory Fpath.pp directory name in
+      name Fpath.pp rel Fpath.pp abs name in
     [ dune ] in
   let configure _info =
     Hashtbl.add Mirage_impl_block.all_blocks
@@ -134,8 +138,8 @@ let docteur_unix ~name directory =
 
 let docteur ~name directory =
   match_impl Key.(value target)
-    [ (`Unix,   docteur_unix ~name directory)
-    ; (`MacOSX, docteur_unix ~name directory)
+    [ (`Unix,   docteur_unix  ~name directory)
+    ; (`MacOSX, docteur_unix  ~name directory)
     ; (`Hvt,    docteur_solo5 ~name directory)
     ; (`Spt,    docteur_solo5 ~name directory)
     ; (`Virtio, docteur_solo5 ~name directory)
@@ -245,7 +249,7 @@ let packages =
   ; package "irmin-mirage-git" ~min:"2.5.3"
   ; package ~sublibs:[ "mirage" ] "dns-certify"
   ; package "multipart_form" ~sublibs:[ "lwt" ] ~min:"0.2.0"
-  ; package "paf" ~min:"0.3.0"
+  ; package "paf" ~min:"0.0.3"
   ; package "ocplib-json-typed"
   ; package "ezjsonm"
   ; package ~sublibs:[ "le" ] "paf" ]
