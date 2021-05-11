@@ -96,6 +96,8 @@ let docteur_solo5 ~name directory =
              (action (run docteur.make file://%a/ %s.img)))|dune}
       name Fpath.pp rel Fpath.pp abs name in
     [ dune ] in
+  let install _info =
+    Functoria.Install.v ~etc:[ Fpath.v (Fmt.str "%s.img" name) ] () in
   let configure _info =
     Hashtbl.add Mirage_impl_block.all_blocks
       name { Mirage_impl_block.filename= name; number= 0; } ;
@@ -106,7 +108,7 @@ let docteur_solo5 ~name directory =
              let f = Rresult.R.(failwith_error_msg <.> reword_error (msgf "%%a" %s.pp_error)) in
              Lwt.map f (%s.connect %S)|ocaml}
       modname modname name in
-  impl ~configure ~packages ~dune ~connect ~keys:[ Key.v directory ] "Docteur_solo5.Fast" kv_ro
+  impl ~install ~configure ~packages ~dune ~connect ~keys:[ Key.v directory ] "Docteur_solo5.Fast" kv_ro
 
 let docteur_unix ~name directory =
   let packages = [ package "docteur-unix" ] in
@@ -124,6 +126,8 @@ let docteur_unix ~name directory =
              (action (run docteur.make file://%a/ %s.img)))|dune}
       name Fpath.pp rel Fpath.pp abs name in
     [ dune ] in
+  let install _info =
+    Functoria.Install.v ~etc:[ Fpath.v (Fmt.str "%s.img" name) ] () in
   let configure _info =
     Hashtbl.add Mirage_impl_block.all_blocks
       name { Mirage_impl_block.filename= name; number= 0; } ;
@@ -134,7 +138,7 @@ let docteur_unix ~name directory =
              let f = Rresult.R.(failwith_error_msg <.> reword_error (msgf "%%a" %s.pp_error)) in
              Lwt.map f (%s.connect %S)|ocaml}
       modname modname (name ^ ".img") in
-  impl ~configure ~packages ~dune ~connect ~keys:[ Key.v directory ] "Docteur_unix.Fast" kv_ro
+  impl ~install ~configure ~packages ~dune ~connect ~keys:[ Key.v directory ] "Docteur_unix.Fast" kv_ro
 
 let docteur ~name directory =
   match_impl Key.(value target)
@@ -207,7 +211,7 @@ let https =
 
 let local =
   let doc = Key.Arg.info ~doc:"Local directory which contains *.js and *.css files." [ "local" ] in
-  Key.(create "local" Arg.(required ~stage:`Configure string doc))
+  Key.(create "local" Arg.(opt ~stage:`Configure (some string) None doc))
 
 let pasteur =
   foreign "Unikernel.Make"
@@ -250,7 +254,7 @@ let packages =
   ; package ~sublibs:[ "mirage" ] "dns-certify"
   ; package "multipart_form" ~sublibs:[ "lwt" ] ~min:"0.2.0"
   ; package "paf" ~min:"0.0.3"
-  ; package "ocplib-json-typed"
+  ; package "json-data-encoding"
   ; package "ezjsonm"
   ; package ~sublibs:[ "le" ] "paf" ]
 

@@ -1,7 +1,0 @@
-(executable
- (name pasteur)
- (modules pasteur)
- (libraries rresult fmt brr tyxml)
- (modes js))
-
-(rule (mode promote) (action (copy pasteur.bc.js pasteur.js)))
