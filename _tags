@@ -1,2 +1,0 @@
-<*.{native,o}>: package(checkseum.c digestif.c)
-<*.{ml,cmx}>: warn(-45)

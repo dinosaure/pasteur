@@ -1,7 +1,13 @@
 (executable
- (name pasteur)
- (modules pasteur)
+ (enabled_if (= %{context_name} "default"))
+ (name pasteur_js)
+ (modules pasteur_js)
  (libraries rresult fmt brr tyxml)
  (modes js))
 
-(rule (mode promote) (action (copy pasteur.bc.js pasteur.js)))
+(executable
+ (enabled_if (= %{context_name} "default"))
+ (name pasteur_hljs)
+ (modules pasteur_hljs)
+ (libraries fmt brr js_of_ocaml)
+ (modes js))
