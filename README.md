@@ -104,7 +104,7 @@ $ git init --bare --shared
 $ git config receive.denyCurrentBranch ignore
 $ git read-tree --empty
 $ FIRST_COMMIT=`git commit-tree $(git write-tree) -m .`
-$ git update-ref "refs/heads/master" $FIRST_COMMIT
+$ git update-ref "refs/heads/main" $FIRST_COMMIT
 $ cd ..
 ```
 
@@ -214,7 +214,7 @@ $ mirage build
 
 And you builded the unikernel! However, this unikernel needs to communicate with
 a remote Git repository. In an other shell, we need to make a new Git repository
-with, at least, one commit in `master`:
+with, at least, one commit in `main`:
 
 ```sh
 $ mkdir pasteur
@@ -222,7 +222,7 @@ $ cd pasteur
 $ git init --bare
 $ git read-tree --empty
 $ FIRST_COMMIT=`git commit-tree $(git write-tree) -m .`
-$ git update-ref "refs/heads/master" $FIRST_COMMIT
+$ git update-ref "refs/heads/main" $FIRST_COMMIT
 ```
 
 Then, we can launch the Git server:

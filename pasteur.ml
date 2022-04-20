@@ -1,41 +1,23 @@
 open Httpaf
-
-module Option = struct
-  let bind a f = match a with Some a -> f a | None -> None
-  let map f = function Some x -> Some (f x) | None -> None
-  let ( >>= ) = bind
-end
-
-module List = struct
-  include List
-
-  let hd_opt = function x :: _ -> Some x | [] -> None
-end
-
-let formatter_of_body body =
-  let output x off len = Body.write_string body ~off ~len x in
-  let flush () = Body.flush body (fun () -> ()) in
-  Format.make_formatter output flush
-
-let parse_content_type str =
-  Multipart_form.Content_type.of_string (str ^ "\r\n")
+open Lwt.Infix
 
 let extract_content_type request =
-  let exception Found in
   let headers = request.Request.headers in
-  let content_type = ref None in
-  try
-    List.iter
-      (fun (field_name, v) -> match String.lowercase_ascii field_name with
-         | "content-type" ->
-           ( match parse_content_type v with
-             | Ok v -> content_type := Some v ; raise Found
-             | _ -> () )
-         | _ -> ())
-      (Headers.to_list headers) ; None
-  with Found -> !content_type
+  match Httpaf.Headers.get headers "content-type" with
+  | None -> None
+  | Some str ->
+    match Multipart_form.Content_type.of_string (str ^ "\r\n") with
+    | Ok v -> Some v
+    | Error (`Msg _err) -> None
 
-type key = Paste | User | Comment | Ln | Raw | Hl | Encrypted
+type key =
+  | Paste
+  | User
+  | Comment
+  | Ln
+  | Raw
+  | Hl
+  | Encrypted
 
 let key_of_string = function
   | "paste" -> Some Paste
@@ -47,79 +29,48 @@ let key_of_string = function
   | "encrypted" -> Some Encrypted
   | _ -> None
 
-let get_key header =
+let identify header =
   let open Multipart_form in
   let ( >>= ) = Option.bind in
-  Header.content_disposition header >>= fun v ->
-  Content_disposition.name v >>= fun n ->
-  key_of_string n
+  let ( >>| ) x f = Option.map f x in
+  Header.content_disposition header
+  >>= Content_disposition.name
+  >>| String.lowercase_ascii
+  >>= key_of_string
 
 let string_of_key = function
-  | Paste -> "paste" | User -> "user" | Comment -> "comment" | Ln -> "ln"
-  | Raw -> "raw" | Hl -> "hl" | Encrypted -> "encrypted"
+  | Paste -> "paste"
+  | User -> "user"
+  | Comment -> "comment"
+  | Ln -> "ln"
+  | Raw -> "raw"
+  | Hl -> "hl"
+  | Encrypted -> "encrypted"
 
-let pp_string ppf x = Fmt.pf ppf "%S" x
-let blit src src_off dst dst_off len = Bigstringaf.blit src ~src_off dst ~dst_off ~len
-
-module Qe = Ke.Rke
-let src = Logs.Src.create "multipart"
-module Log = (val Logs.src_log src : Logs.LOG)
+let stream_of_body body =
+  let stream, push = Lwt_stream.create () in
+  let rec on_eof () =
+    push None
+  and on_read buf ~off ~len =
+    push (Some (Bigstringaf.substring buf ~off ~len)) ;
+    Httpaf.Body.schedule_read body ~on_eof ~on_read in
+  Httpaf.Body.schedule_read body ~on_eof ~on_read ;
+  stream
 
 let extract_parts content_type body =
-  let open Angstrom.Unbuffered in
-
-  let hashtbl = Hashtbl.create 7 in
-  let emitters header = 
-    match get_key header with
-    | Some key ->
-      let stream, push = Lwt_stream.create () in
-      Hashtbl.add hashtbl key stream ; push, Some key
-    | None -> (fun _ -> ()), None in
-
-  let thread, finished = Lwt.task () in
-  let state = ref (parse (Multipart_form.parser ~emitters content_type)) in
-  let ke = Qe.create ~capacity:0x1000 Bigarray.Char in
-
-  let rec on_eof () =
-    match !state with
-    | Partial { continue; committed; } ->
-      Qe.N.shift_exn ke committed ;
-      if committed = 0 then Qe.compress ke ;
-      ( match Qe.N.peek ke with
-        | [] -> state := continue Bigstringaf.empty ~off:0 ~len:0 Complete
-        | [ slice ] -> state := continue slice ~off:0 ~len:(Bigstringaf.length slice) Complete
-        | slice :: _ -> state := continue slice ~off:0 ~len:(Bigstringaf.length slice) Incomplete ) ;
-      on_eof ()
-    | Fail (_, _, err) ->
-      Log.err (fun m -> m "Got an error while parsing multipart: %s" err) ;
-      Lwt.wakeup_later finished (Rresult.R.error_msgf "bad POST request")
-    | Done (_, v) ->
-      Log.debug (fun m -> m "Receive a multipart request.") ;
-      Lwt.wakeup_later finished (Rresult.R.ok v)
-  and on_read buf ~off ~len =
-    match !state with
-    | Partial { continue; committed; } ->
-      Log.debug (fun m -> m "Committed %d byte(s)." committed) ;
-      Qe.N.shift_exn ke committed ;
-      if committed = 0 then Qe.compress ke ;
-      Qe.N.push ke ~blit ~length:Bigstringaf.length ~off ~len buf ;
-      Log.debug (fun m -> m "Length of internal queue: %x byte(s)." (Qe.length ke)) ;
-      (* if Qe.capacity ke >= 0x10000
-         then Lwt.wakeup_later finished (Rresult.R.error_msgf "POST buffer is too big!") ; *)
-      if not (Qe.is_empty ke)
-      then ( let[@warning "-8"] slice :: _ = Qe.N.peek ke in
-             state := continue slice ~off:0 ~len:(Bigstringaf.length slice) Incomplete ) ;
-      Body.schedule_read body ~on_eof ~on_read
-    | Fail (_, _, err) ->
-      Log.err (fun m -> m "Got an error while parsing multipart: %s" err) ;
-      Lwt.wakeup_later finished (Rresult.R.error_msgf "bad POST request")
-    | Done (_, v) ->
-      Log.debug (fun m -> m "Receive a multipart request.") ;
-      Lwt.wakeup_later finished (Rresult.R.ok v) in
-  let open Lwt.Infix in
-  Body.schedule_read body ~on_eof ~on_read ;
-  thread >>= fun res -> Body.close_reader body ; match res with
+  let stream = stream_of_body body in
+  let `Parse th, stream = Multipart_form_lwt.stream
+    ~identify stream content_type in
+  th >>= fun result ->
+  Httpaf.Body.close_reader body ;
+  match result with
   | Error _ as err -> Lwt.return err
-  | Ok _ ->
-    let lst = Hashtbl.fold (fun k s a -> (k, Lwt_stream.to_list s) :: a) hashtbl [] in
-    Lwt_list.map_p (fun (k, t) -> t >|= fun v -> (k, String.concat "" v)) lst >|= Rresult.R.ok
+  | Ok _tree ->
+    Lwt_stream.to_list stream
+    >>= Lwt_list.filter_map_p (fun (id, headers, stream) ->
+      Lwt_stream.to_list stream
+      >|= String.concat ""
+      >>= fun contents -> match id with
+      | Some key -> Lwt.return_some (key, contents)
+      | None -> Lwt.return_none)
+    >>= fun bindings -> Lwt.return_ok bindings

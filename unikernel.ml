@@ -1,25 +1,7 @@
 open Lwt.Infix
+open Lwt.Syntax
 open Pasteur
 open Httpaf
-
-let ( <.> ) f g = fun x -> f (g x)
-
-let failwith fmt = Format.kasprintf (fun err -> Lwt.fail (Failure err)) fmt
-
-let failwith_error_msg = function
-  | Error (`Msg err) -> Lwt.fail (Failure err)
-  | Ok v -> Lwt.return v
-
-module Option = struct
-  let fold ~none ~some = function
-    | Some x -> some x
-    | None -> none
-
-  let value x ~default = match x with
-    | Some x -> x | None -> default
-
-  include Option
-end
 
 module Blob = struct
   type t =
@@ -37,6 +19,18 @@ module Blob = struct
   let merge = Irmin.Merge.(option (idempotent t))
 end
 
+let argument_error = 64
+
+let key_type kt =
+  match X509.Key_type.of_string kt with
+  | Ok kt -> kt
+  | Error `Msg msg ->
+    Logs.err (fun m -> m "cannot decode key type %s: %s" kt msg);
+    exit argument_error
+
+module Store = Irmin_mirage_git.Mem.KV.Make(Blob)
+module Sync = Irmin.Sync.Make(Store)
+
 module Make
     (Random : Mirage_random.S)
     (Console : Mirage_console.S)
@@ -44,127 +38,60 @@ module Make
     (Mclock : Mirage_clock.MCLOCK)
     (Pclock : Mirage_clock.PCLOCK)
     (Public : Mirage_kv.RO)
+    (Stack : Tcpip.Stack.V4V6)
+    (DNS : Dns_client_mirage.S with type Transport.stack = Stack.t)
     (_ : sig end)
-    (StackV4 : Mirage_stack.V4)
-    (Stack : Mirage_stack.V4V6)
 = struct
-  module Paf = Paf.Make(Time)(Stack)
-  module HTTP_Letsencrypt = LE.Make(Time)(Paf)
-  module DNS_Letsencrypt = DLE.Make(Random)(Pclock)(Time)(StackV4)
-  module Resolver = Dns_client_mirage.Make(Random)(Time)(Mclock)(StackV4)
+  module Nss = Ca_certs_nss.Make(Pclock)
+  module Paf = Paf_mirage.Make(Time)(Stack.TCP)
+  module LE = LE.Make(Time)(Stack)
 
-  let error_handler _ ?request:_ _ _ = ()
-
-  type provision =
-    | DNS of DNS_Letsencrypt.configuration
-    | HTTP of HTTP_Letsencrypt.configuration
-
-  let tcp_connect scheme stack ipaddr port =
-    match scheme with
-    | `HTTP -> Lwt.return_some (stack, ipaddr, port)
-    | _ -> Lwt.return_none
-
-  let tls_connect scheme domain_name cfg stack ipaddr port =
-    Logs.debug (fun m -> m "Start a TLS connection with %a:%d [%a]."
-      Fmt.(Dump.option Domain_name.pp) domain_name port Ipaddr.pp ipaddr) ;
-    match scheme with
-    | `HTTPS -> Lwt.return_some (domain_name, cfg, stack, ipaddr, port)
-    | _ ->
-      Logs.warn (fun m -> m "Avoid the TLS connection with %a:%d."
-        Ipaddr.pp ipaddr port) ;
-      Lwt.return_none
-
-  let dns_resolver_v4 dns domain_name =
-    Resolver.gethostbyname dns domain_name >>= function
-    | Ok ipv4 -> Lwt.return_some (Ipaddr.V4 ipv4)
-    | _ -> Lwt.return_none
-
-  let dns_resolver_v6 dns domain_name =
-    Resolver.gethostbyname6 dns domain_name >>= function
-    | Ok ipv6 -> Lwt.return_some (Ipaddr.V6 ipv6)
-    | _ -> Lwt.return_none
-
-  let null =
-    let authenticator ~host:_ _ = Ok None in
-    Tls.Config.client ~authenticator ()
-
-  let provision ?production stackv4 stack_v = function
-    | DNS cfg -> DNS_Letsencrypt.provision_certificate stackv4 cfg
-    | HTTP cfg ->
-      let dns   = Mimic.make ~name:"dns" in
-      let stack = Mimic.make ~name:"stack" in
-      let tls   = Mimic.make ~name:"tls" in
-
-      let ctx =
-        let open HTTP_Letsencrypt in
-        Mimic.empty
-        |> Mimic.(fold Paf.tcp_edn Fun.[ req scheme; req stack; req ipaddr; dft port 80; ] ~k:tcp_connect)
-        |> Mimic.(fold Paf.tls_edn Fun.[ req scheme; opt domain_name; dft tls null; req stack; req ipaddr; dft port 443; ]
-                    ~k:tls_connect)
-        (* |> Mimic.(fold ipaddr Fun.[ req dns; req domain_name ] ~k:dns_resolver_v6) *)
-        |> Mimic.(fold ipaddr Fun.[ req dns; req domain_name ] ~k:dns_resolver_v4)
-        |> Mimic.add dns (Resolver.create stackv4)
-        |> Mimic.add stack stack_v in
-      Paf.init ~port:80 stack_v >>= fun service ->
-      Lwt_switch.with_switch @@ fun stop ->
-      let `Initialized t = Paf.http ~stop
-        ~request_handler:HTTP_Letsencrypt.request_handler
-        ~error_handler service in
-      let fiber =
-        HTTP_Letsencrypt.provision_certificate ?production cfg ctx >>= fun res ->
-        Logs.info (fun m -> m "Got a TLS certificate and stop the let's encrypt server.") ;
-        Lwt_switch.turn_off stop >>= fun () -> Lwt.return res in
-      Lwt.both t fiber >>= fun (_, tls) ->
-      Logs.info (fun m -> m "Let's encrypt server terminated.") ;
-      Lwt.return tls
-
-  module Store = Irmin_mirage_git.Mem.KV(Blob)
-  module Sync = Irmin.Sync(Store)
-
-  let log console fmt = Fmt.kstrf (Console.log console) fmt
+  let ignore_error_handler _ ?request:_ _ _ = ()
+  let log console fmt = Fmt.kstr (Console.log console) fmt
 
   let connect_store ~ctx =
-    let config = Irmin_mem.config () in
-    Store.Repo.v config >>= Store.master >|= fun repository ->
-    repository, Store.remote ~ctx (Key_gen.remote ())
+    let config = Irmin_git.config "." in
+    let remote, branch = match String.split_on_char '#' (Key_gen.remote ()) with
+      | [ remote; branch ] -> remote, branch
+      | _ -> (Key_gen.remote ()), "master" in
+    Store.Repo.v config >>= fun repository -> Store.of_branch repository branch >>= fun active_branch ->
+    Lwt.return (active_branch, Store.remote ~ctx remote)
 
-  let load console repository remote key =
-    Store.find repository key >>= function
+  let reload _console active_branch remote key =
+    Store.find active_branch key >>= function
     | Some contents -> Lwt.return (Some contents)
     | None ->
-      log console "Fetch remote repository." >>= fun () ->
-      Sync.pull repository remote `Set >>= function
-      | Ok `Empty | Ok (`Head _) ->
-        log console "Synchronization done." >>= fun () ->
-        Store.find repository key
-      | Error (`Msg err) -> Lwt.fail (Failure err)
-      | Error (`Conflict err) -> failwith "Conflict! [%s]" err
+      Sync.pull active_branch remote `Set >>= function
+      | Ok `Empty | Ok (`Head _) -> Store.find active_branch key
+      | Error (`Msg err) -> failwith err
+      | Error (`Conflict err) -> Fmt.failwith "Conflict! [%s]" err
 
-  let show ?ln:(_ = false) ?hl console store remote reqd target () =
+  let show ?ln:(_ = false) ?hl console active_branch remote reqd target =
     let open Httpaf in
-    log console "Want to access to: %a." Fmt.(Dump.list string) target >>= fun () ->
-    load console store remote target >>= function
+    let* () = log console "Want to access to: %a." Fmt.(Dump.list string) target in
+    reload console active_branch remote target >>= function
     | None ->
-      let contents = Fmt.strf "%s Not found." (String.concat "/" target) in
+      let contents = Fmt.str "%s Not found." (String.concat "/" target) in
       let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
       let response = Response.create ~headers `Not_found in
       Reqd.respond_with_string reqd response contents ;
       log console "Response: 404 Not found for %a." Fmt.(Dump.list string) target
     | Some { Blob.contents; encrypted; } ->
-      let html = Show.html ?code:(Option.map Language.value_of_language hl) ~encrypted contents in
-      let contents = Fmt.strf "%a%!" (Tyxml.Html.pp ()) html in
+      let code = Option.map Language.to_string hl in
+      let html = Show.html ?code ~encrypted contents in
+      let contents = Fmt.str "%a%!" (Tyxml.Html.pp ()) html in
       let headers = Headers.of_list [ "content-type", "text/html"
                                     ; "content-length", string_of_int (String.length contents) ] in
       let response = Response.create ~headers `OK in
       Reqd.respond_with_string reqd response contents ;
-      Lwt.return ()
+      Lwt.return_unit
 
-  let show_raw console store remote reqd target () =
+  let show_raw console active_branch remote reqd target =
     let open Httpaf in
-    log console "Want to access to: %a (raw)." Fmt.(Dump.list string) target >>= fun () ->
-    load console store remote target >>= function
+    let* () = log console "Want to access to: %a (raw)." Fmt.(Dump.list string) target in
+    reload console active_branch remote target >>= function
     | None ->
-      let contents = Fmt.strf "%s Not found." (String.concat "/" target) in
+      let contents = Fmt.str "%s Not found." (String.concat "/" target) in
       let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
       let response = Response.create ~headers `Not_found in
       Reqd.respond_with_string reqd response contents ;
@@ -174,7 +101,7 @@ module Make
                                     ; "content-length", string_of_int (String.length contents) ] in
       let response = Response.create ~headers `OK in
       Reqd.respond_with_string reqd response contents ;
-      Lwt.return ()
+      Lwt.return_unit
 
   type dispatch =
     | INDEX
@@ -196,13 +123,15 @@ module Make
 
   let json =
     let open Json_encoding in
+    let language =
+      string_enum (List.map (fun v -> Language.to_string v, v) Language.all) in
     conv
       (fun { ln; raw; hl; code; } -> (ln, raw, hl, code))
       (fun (ln, raw, hl, code) -> { ln; raw; hl; code; })
       (obj4
         (opt "ln" bool)
         (opt "raw" bool)
-        (opt "hl" Language.json)
+        (opt "hl" language)
         (req "code" string))
 
   (* Try to generate JSON as short as possible by taking advantage of the
@@ -220,9 +149,12 @@ module Make
       | _ -> default
     in
     let ln = query_bool ~default:ln_default "ln" in
-    let hl = let open Option in
-      List.assoc_opt "hl" queries >>= List.hd_opt >>=
-      Language.language_of_value_opt in
+    let hl =
+      let ( >>= ) = Option.bind in
+      let hd_opt = function [] -> None | x :: _ -> Some x in
+      List.assoc_opt "hl" queries >>= hd_opt >>= fun hl ->
+      match Language.of_string hl with
+      | v -> Some v | exception _ -> None in
     let raw = query_bool ~default:raw_default "raw" in
     GET { target; ln; hl; raw; }
 
@@ -250,20 +182,20 @@ module Make
     let languages =
       ("No highlighting", None) ::
       List.map (fun c ->
-        Language.string_of_language c, Some (Language.value_of_language c)
+        Language.to_string c, Some (Language.to_string c)
       ) Language.all
     in
     let html = Form.html ~title:"Past-isserie" ~documentation:"Pasteur" languages in
-    Fmt.strf "%a%!" (Tyxml.Html.pp ()) html
+    Fmt.str "%a%!" (Tyxml.Html.pp ()) html
 
-  let index _ reqd () =
+  let index _ reqd =
     let headers = Headers.of_list [ "content-type", "text/html; charset=utf-8"
                                   ; "content-length", string_of_int (String.length index_contents) ] in
     let response = Response.create ~headers `OK in
     Reqd.respond_with_string reqd response index_contents ;
     Lwt.return ()
 
-  let load console public reqd key () =
+  let load console public reqd key =
     Public.get public key >>= fun contents -> match contents, Mirage_kv.Key.segments key with
     | Error _, _ -> assert false
     | Ok contents, ([ "highlight.pack.js" ] | [ "pasteur.js" ] as path) ->
@@ -288,38 +220,36 @@ module Make
           ; "connection", "close" ] in
       let response = Response.create ~headers `OK in
       Reqd.respond_with_string reqd response contents ;
-      Lwt.return ()
+      Lwt.return_unit
 
-  let push console store remote ?(author= "pasteur") key value =
-    log console "<<< store:%a." Store.Status.pp (Store.status store) >>= fun () ->
-    let commit0 = match Store.status store with
-      | `Branch branch ->
-        Store.Branch.get (Store.repo store) branch
+  let push console active_branch remote ?(author= "pasteur") key value =
+    let commit0 = match Store.status active_branch with
+      | `Branch branch -> Store.Branch.get (Store.repo active_branch) branch
       | `Commit commit -> Lwt.return commit
       | `Empty -> failwith "Empty repository" in
     commit0 >>= fun commit0 ->
     let _, date = Pclock.now_d_ps () in
-    let info () = Irmin.Info.v ~date ~author (String.concat "/" key) in
-    Store.set ~parents:[ commit0 ] ~info store key value >>= function
-    | Error (`Conflict c) -> failwith "Conflict! [%s]" c
+    let info () = Store.Info.v ~author ~message:(String.concat "/" key) date in
+    Store.set ~parents:[ commit0 ] ~info active_branch key value >>= function
+    | Error (`Conflict c) -> Fmt.failwith "Conflict! [%s]" c
     | Error (`Test_was _) | Error (`Too_many_retries _) -> failwith "Error to update local repository!"
     | Ok () ->
-      Sync.push store remote >>= function
+      Sync.push active_branch remote >>= function
       | Ok `Empty -> failwith "Got an empty repository"
       | Ok (`Head commit1) ->
-        log console ">>> commit:%a -> commit:%a." Store.Commit.pp_hash commit0 Store.Commit.pp_hash commit1
+        log console "[update] commit:%a -> commit:%a." Store.Commit.pp_hash commit0 Store.Commit.pp_hash commit1
       | Error `Detached_head -> failwith "Detached head!"
-      | Error (`Msg err) -> Lwt.fail (Failure err)
+      | Error (`Msg err) -> failwith err
 
   let is_on = (=) "on"
 
-  let post random console store remote reqd () =
+  let post random console active_branch remote reqd =
     match extract_content_type (Reqd.request reqd) with
     | None -> assert false (* TODO: redirect to INDEX. *)
     | Some content_type ->
       let body = Reqd.request_body reqd in
       extract_parts content_type body >>= function
-      | Error _ as err -> failwith_error_msg err
+      | Error _ as err -> Rresult.R.failwith_error_msg err
       | Ok posts ->
         match List.assoc Paste posts,
               List.assoc_opt Hl posts,
@@ -327,11 +257,11 @@ module Make
         | contents, hl, encrypted ->
           let random = random () in
           let encrypted = Option.fold ~none:false ~some:is_on encrypted in
-          let hl = Option.fold ~none:None ~some:Language.language_of_value_opt hl in
+          let hl = try Option.map Language.of_string hl with _ -> None in
           let author = List.assoc_opt User posts in
           let ln = List.exists (function (Ln, _) -> true | _ -> false) posts in
           let raw = List.exists (function (Raw, _) -> true | _ -> false) posts in
-          push console store remote ?author [ random ] { Blob.contents; encrypted; } >>= fun () ->
+          push console active_branch remote ?author [ random ] { Blob.contents; encrypted; } >>= fun () ->
           let str = make_paste_json_string ~ln ?hl ~raw random in
           let headers = Headers.of_list [ "content-type", "application/json"
                                         ; "content-length", string_of_int (String.length str)
@@ -344,33 +274,33 @@ module Make
           let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
           let response = Response.create ~headers `Not_found in
           Reqd.respond_with_string reqd response contents ;
-          Lwt.return ()
+          Lwt.return_unit
 
-  let main random console public store rd_remote wr_remote reqd = function
+  let main random console public active_branch remote reqd = function
     | INDEX ->
-      log console "> dispatch index." >>= index console reqd
+      let* () = log console "[dispatch] index" in
+      index console reqd
     | GET { target; ln; hl; raw= false; } ->
-      log console "> dispatch get:%a." Fmt.(Dump.list string) target
-      >>= show ~ln ?hl console store rd_remote reqd target
+      let* () = log console "[dispatch] get:%a" Fmt.(Dump.list string) target in
+      show ~ln ?hl console active_branch remote reqd target
     | GET { target; raw= true; _ } ->
-      log console "> dispatch raw:%a." Fmt.(Dump.list string) target
-      >>= show_raw console store rd_remote reqd target
+      let* () = log console "[dispatch] raw:%a" Fmt.(Dump.list string) target in
+      show_raw console active_branch remote reqd target
     | CONTENTS key ->
-      log console "> dispatch contents:%a." Mirage_kv.Key.pp key
-      >>= load console public reqd key
+      let* () = log console "[dispatch] contents:%a" Mirage_kv.Key.pp key in
+      load console public reqd key
     | POST ->
-      log console "> dispatch post."
-      >>= post random console store wr_remote reqd
+      let* () = log console "[dispatch] post." in
+      post random console active_branch remote reqd
 
-  let request_handler random console public store rd_remote wr_remote (_ipaddr, _port) reqd =
+  let request_handler random console public active_branch remote (_ipaddr, _port) reqd =
     let open Httpaf in
     let res () =
       Lwt.catch
-        (fun () -> dispatch public reqd >>= main random console public store rd_remote
-            wr_remote reqd)
+        (fun () -> dispatch public reqd >>= main random console public active_branch remote reqd)
         (fun exn ->
            let res = Printexc.to_string exn in
-           log console "Got an error: %s." res >>= fun () ->
+           let* () = log console "Got an error: %s" res in
            let headers = Headers.of_list [ "connection", "close" ] in
            let response = Response.create ~headers `Internal_server_error in
            Lwt.return (Reqd.respond_with_string reqd response (Printexc.to_string exn))) in
@@ -394,7 +324,7 @@ module Make
   let exit_expired = 80
 
   let quit_before_expire = function
-    | Ok (`Single (server :: _, _) as tls) ->
+    | `Single (server :: _, _) as tls ->
       let expiry = snd (X509.Certificate.validity server) in
       let diff = Ptime.diff expiry (Ptime.v (Pclock.now_d_ps ())) in
       ( match Ptime.Span.to_int_s diff with
@@ -405,49 +335,59 @@ module Make
           Time.sleep_ns Int64.(sub (Duration.of_sec x) (Duration.of_day 1)) >|= fun () ->
           exit exit_expired ) ;
       Lwt.return tls
-    | Ok tls -> Lwt.return tls
-    | Error (`Msg err) -> failwith "TLS: %s" err
+    | tls -> Lwt.return tls
 
-  let cfg () =
-    match Key_gen.https (),
-          Key_gen.dns_key (), Key_gen.dns_port (), Key_gen.dns_addr (), Key_gen.cert_seed (),
-          Key_gen.email (), Key_gen.account_seed (), Key_gen.hostname () with
-    | true, Some dns_key, dns_port, Some dns_addr, cert_seed,
-      _, _, tls_hostname ->
-      Logs.info (fun m -> m "Ready to get the TLS certificate from the DNS service.") ;
-      let hostname = Rresult.(R.error_msg_to_invalid_arg Domain_name.(of_string tls_hostname >>= host)) in
-      Some (DNS { key= dns_key; port= dns_port; addr= dns_addr; seed= cert_seed; hostname; })
-    | true, _, _, _, cert_seed, email, account_seed, tls_hostname ->
-      Logs.info (fun m -> m "Ready to get the TLS certificate from a local HTTP service.") ;
-      let hostname = Rresult.(R.error_msg_to_invalid_arg Domain_name.(of_string tls_hostname >>= host)) in
-      let email = Option.bind email (Rresult.R.to_option <.> Emile.of_string) in
-      Some (HTTP { email; seed= account_seed; certificate_seed= cert_seed; hostname; })
-    | _ -> None
+  let pull (active_branch, remote) = Sync.pull active_branch remote `Set >>= function
+    | Error (`Msg err) -> failwith err
+    | Error (`Conflict err) -> failwith err
+    | Ok (`Empty | `Head _) -> Lwt.return (active_branch, remote)
 
-  let pull (store, rd_remote) = Sync.pull store rd_remote `Set >>= function
-    | Error (`Msg err) -> Lwt.fail (Failure err)
-    | Error (`Conflict err) -> Lwt.fail (Failure err)
-    | Ok (`Empty | `Head _) -> Lwt.return (store, rd_remote)
+  let provision ~production cfg stack dns =
+    Paf.init ~port:80 (Stack.tcp stack) >>= fun t ->
+    let service = Paf.http_service ~error_handler:ignore_error_handler (fun _ -> LE.request_handler) in
+    let stop = Lwt_switch.create () in
+    let `Initialized th0 = Paf.serve ~stop service t in
+    let th1 =
+      let gethostbyname dns domain_name = DNS.gethostbyname dns domain_name >>? fun ipv4 ->
+        Lwt.return_ok (Ipaddr.V4 ipv4) in
+      LE.provision_certificate
+        ~production cfg
+        (LE.ctx ~gethostbyname ~authenticator:(Result.get_ok (Nss.authenticator ())) dns stack) >>? fun certificates ->
+      Lwt_switch.turn_off stop >>= fun () -> Lwt.return_ok certificates in
+    Lwt.both th0 th1 >>= function
+    | ((), Error (`Msg err)) -> failwith err
+    | ((), Ok certificates) -> Lwt.return certificates
 
-  let start _random console _time _mclock _pclock public ctx stackv4 stack =
+  let start _random console _time _mclock _pclock public stack dns ctx _js _hljs =
     let seed = random_bytes (Key_gen.random_length ()) in
-    connect_store ~ctx >>= pull >>= fun (store, rd_remote) ->
-    let wr_remote = Store.remote ~ctx (Key_gen.remote ()) in
-    Logs.info (fun m -> m "Local store synchronized.") ;
-    match cfg () with
-    | None ->
+    connect_store ~ctx >>= pull >>= fun (active_branch, remote) ->
+    match Key_gen.https () with
+    | false ->
       Logs.info (fun m -> m "Initialise an HTTP server (no HTTPS).") ;
-      let request_handler = request_handler seed console public store rd_remote wr_remote in
+      let request_handler _flow = request_handler seed console public active_branch remote in
       let port = Option.value ~default:80 (Key_gen.port ()) in
-      Paf.init ~port stack >|= Paf.http ~request_handler ~error_handler >>= fun (`Initialized fiber0) ->
-      fiber0
-    | Some cfg ->
+      Paf.init ~port (Stack.tcp stack) >>= fun service ->
+      let http = Paf.http_service ~error_handler:ignore_error_handler request_handler in
+      let (`Initialized th) = Paf.serve http service in
+      th
+    | true ->
       Logs.info (fun m -> m "Download TLS certificate.") ;
-      provision ~production:(Key_gen.production ()) stackv4 stack cfg >>= quit_before_expire >>= fun certificates ->
+      provision ~production:(Key_gen.production ())
+        { LE.certificate_seed= Key_gen.cert_seed ()
+        ; LE.certificate_key_type= key_type (Key_gen.cert_key_type ())
+        ; LE.certificate_key_bits= Some (Key_gen.cert_bits ())
+        ; LE.email= Option.bind (Key_gen.email ()) (fun e -> Emile.of_string e |> Result.to_option)
+        ; LE.account_seed= Key_gen.account_seed ()
+        ; LE.account_key_type= key_type (Key_gen.account_key_type ())
+        ; LE.account_key_bits= Some (Key_gen.account_bits ())
+        ; LE.hostname= Key_gen.hostname () |> Option.get |> Domain_name.of_string_exn |> Domain_name.host_exn }
+        stack dns >>= quit_before_expire >>= fun certificates ->
       Logs.info (fun m -> m "Got a TLS certificate for the server.") ;
       let tls = Tls.Config.server ~certificates () in
-      let request_handler = request_handler seed console public store rd_remote wr_remote in
+      let request_handler _flow = request_handler seed console public active_branch remote in
       let port = Option.value ~default:443 (Key_gen.port ()) in
-      Paf.init ~port stack >|= Paf.https ~tls ~request_handler ~error_handler >>= fun (`Initialized fiber0) ->
-      fiber0
+      Paf.init ~port (Stack.tcp stack) >>= fun service ->
+      let https = Paf.https_service ~tls ~error_handler:ignore_error_handler request_handler in
+      let (`Initialized th) = Paf.serve https service in
+      th
 end

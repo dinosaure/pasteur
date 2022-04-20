@@ -59,7 +59,6 @@ let make_path ?key ?ln ?hl ?raw code =
 let post () =
   match Document.find_el_by_id G.document pasteur with
   | None ->
-    Console.(error [str "No element with id '%s' found"; pasteur]) ;
     Fut.return (Error (Jv.Error.v err_element_pasteur_not_found))
   | Some el ->
     let form = Form.of_el el in
@@ -76,7 +75,7 @@ let post () =
       let init = Fetch.Request.init ~body:(Fetch.Body.of_form_data data) ~method':post () in
       let* key = Subtle_crypto.export_key subtl Crypto_key.Format.jwk key in
       let[@warning "-8"] (`Json_web_key key : [ `Buffer of _ | `Json_web_key of _ ]) = key in
-      let* key = Fut.return (Base64.encode (Json.encode key)) in
+      let* key = Fut.return (Base64.encode (Base64.data_of_binary_jstr (Json.encode key))) in
       let* res = Fetch.request (Fetch.Request.v ~init:init (Jstr.v "/")) in
       let* res = Fetch.Body.json (Fetch.Response.as_body res) in
       let code = Jv.get res "code" |> Jv.to_jstr in
@@ -98,10 +97,8 @@ let post () =
       let* uri = Fut.return (Uri.of_jstr (Jstr.concat [ Uri.to_jstr (Window.location G.window); path ])) in
       Window.set_location G.window uri ; Fut.ok () 
     | Some (`File _), _ ->
-      Console.(error [str "Paste element must be a string"]) ;
       Fut.return (Error (Jv.Error.v err_element_paste_is_not_a_string))
     | None, _ ->
-      Console.(error [str "No element found"]) ;
       Fut.return (Error (Jv.Error.v err_element_paste_not_found)) )
 
 let raw = Jstr.v "raw"
@@ -139,22 +136,17 @@ let show () =
         Document.find_el_by_id G.document output,
         Document.find_el_by_id G.document encrypted with
   | Some src, Some output, Some encrypted when Jv.get (El.to_jv encrypted) "textContent" |> Jv.to_jstr = on ->
-    Console.(debug [str "Data is encrypted."]) ;
     let subtl = Crypto.subtle Crypto.crypto in
     let key = Uri.fragment (Window.location G.window) in
-    let* key = Fut.return Rresult.(Base64.decode key >>= Json.decode) in
-    Console.(debug [str "Key '%s'"; Json.encode key]) ;
+    let* key = Fut.return Rresult.(Base64.decode key >>= (Json.decode <.> Base64.data_to_binary_jstr)) in
     let* key = Subtle_crypto.import_key subtl Crypto_key.Format.jwk (`Json_web_key key)
       sym_key_gen
       ~extractable:false
       ~usages:Crypto_key.Usage.[ decrypt; ] in
-    Console.(debug [str "Key sanitized."]) ;
     let  cipher = Jv.to_jstr (Jv.get (El.to_jv src) "textContent") in
     let* cipher = Fut.return (of_hex (Jstr.to_string cipher)) in
     let  cipher = Tarray.of_int_array Tarray.Uint8 cipher in
-    Console.(debug [str "Decrypt."]) ;
     let* clear = sym_decrypt ~iv subtl key cipher in
-    Console.(debug [str "Decrypted."]) ;
     let open Fut.Syntax in
     let* clear = Fut.return Tarray.(to_jstr (of_buffer Uint8 clear)) in
     ( match clear with
@@ -162,7 +154,6 @@ let show () =
     | Error _ as err ->
       El.set_children output El.[txt err_invalid_key] ; Fut.return err )
   | Some src, Some output, _ ->
-    Console.(debug [str "Data is not encrypted."]) ;
     let clear = Jv.to_jstr (Jv.get (El.to_jv src) "textContent") in
     El.set_children output El.[txt clear] ; Fut.ok ()
   | _ ->
