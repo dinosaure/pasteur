@@ -198,7 +198,7 @@ module Make
   let load console public reqd key =
     Public.get public key >>= fun contents -> match contents, Mirage_kv.Key.segments key with
     | Error _, _ -> assert false
-    | Ok contents, ([ "highlight.pack.js" ] | [ "pasteur.js" ] as path) ->
+    | Ok contents, ([ "highlight.js" ] | [ "pasteur.js" ] as path) ->
       let headers = Headers.of_list
           [ "content-length", string_of_int (String.length contents)
           ; "content-type", "text/javascript"

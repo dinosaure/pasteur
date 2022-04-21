@@ -1,7 +1,7 @@
 open Tyxml.Html
 
 let css_href = Xml.uri_of_string "/pastisserie.css"
-let highlight_js_href = Xml.uri_of_string "highlight.pack.js"
+let highlight_js_href = Xml.uri_of_string "highlight.js"
 let highlight_css_href = Xml.uri_of_string "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/9.15.6/styles/default.min.css"
 let pasteur_js_href = Xml.uri_of_string "pasteur.js"
 
