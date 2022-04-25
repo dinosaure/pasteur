@@ -279,6 +279,15 @@ module Make
     | Some content_type ->
       let body = Reqd.request_body reqd in
       extract_parts content_type body >>= function
+      | Error `Too_big_paste ->
+        let* () = log console "Got a big paste, return a bad request." in
+        let contents = "Too big paste." in
+        let headers = Headers.of_list
+          [ "content-type", "text/plain"
+          ; "content-length", string_of_int (String.length contents) ] in
+        let response = Response.create ~headers `Bad_request in
+        Reqd.respond_with_string reqd response contents ;
+        Lwt.return_unit
       | Error (`Msg err) ->
         let* () = log console "Got an error when extracting multipart/form contents: %s." err in
         let contents = "Bad POST request (malformed POST request)." in
@@ -286,7 +295,7 @@ module Make
           [ "content-type", "text/plain"
           ; "content-length", string_of_int (String.length contents) ] in
         let response = Response.create ~headers `Bad_request in
-        Reqd.respond_with_string reqd response "" ;
+        Reqd.respond_with_string reqd response contents ;
         Lwt.return_unit
       | Ok posts ->
         match List.assoc Paste posts,

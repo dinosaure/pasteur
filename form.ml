@@ -48,7 +48,7 @@ let form lst =
      @ options
      @ name_field
      @ comment_field
-     @ [ input ~a:[ a_input_type `Button; a_onclick "doPost();"; a_value "Paste!" ] () ])
+     @ [ input ~a:[ a_id "paste"; a_input_type `Button; a_onclick "doPost();"; a_value "Paste!" ] () ])
 
 let html ~title:title_contents ~documentation languages : doc =
   html

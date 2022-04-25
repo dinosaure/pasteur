@@ -35,10 +35,13 @@ let err_element_paste_not_found = Jstr.v "No paste element found"
 let err_element_paste_is_not_a_string = Jstr.v "Paste element must be a string"
 let err_invalid_hex_value = Jstr.v "Invalid hex value"
 let err_invalid_key = Jstr.v "Invalid key!"
+let err_server = Jstr.v "Error from the server"
 let on = Jstr.v "on"
 let post = Jstr.v "POST"
+let disabled = Jstr.v "disabled"
 
 let ( <.> ) f g = fun x -> f (g x)
+let ( >>| ) x f = let+ x = x in f x
 let id x = x
 
 let make_path ?key ?ln ?hl ?raw code =
@@ -56,9 +59,43 @@ let make_path ?key ?ln ?hl ?raw code =
     Fmt.kstr (Fut.ok <.> Jstr.of_string) "%s%s#%s" (Jstr.to_string code) args (Jstr.to_string key)
   | None -> Fmt.kstr (Fut.ok <.> Jstr.of_string) "%s%s" (Jstr.to_string code) args
 
+let alert = Jv.get Jv.global "alert"
+let alert v = ignore @@ Jv.apply alert Jv.[| of_string v |]
+
+let handle_response ?key response =
+  match Fetch.Response.status response with
+  | 200 ->
+    let* v = Fetch.Body.json (Fetch.Response.as_body response) in
+    let code = Jv.get v "code" |> Jv.to_jstr in
+    let hl = Jv.find v "hl" |> Option.map Jv.to_string in
+    let ln = Jv.find v "ln" |> Option.map Jv.to_bool in
+    let raw = Jv.find v "raw" |> Option.map Jv.to_bool in
+    let* path = make_path ?hl ?ln ?raw ?key code in
+    let* uri = Fut.return (Uri.of_jstr (Jstr.concat [ Uri.to_jstr (Window.location G.window); path ])) in
+    Window.set_location G.window uri ; Fut.ok () 
+  | 400 | 500 ->
+    let* text = Fetch.Body.text (Fetch.Response.as_body response) in
+    alert (Jstr.to_string text) ;
+    Fut.return (Error (Jv.Error.v err_server))
+  | _ ->
+    alert "Invalid response from the server." ;
+    Fut.return (Error (Jv.Error.v err_server))
+
+let disable_button () =
+  match Document.find_el_by_id G.document (Jstr.v "paste") with
+  | None -> ()
+  | Some el -> El.set_prop (El.Prop.bool disabled) true el
+
+let enable_button () =
+  match Document.find_el_by_id G.document (Jstr.v "paste") with
+  | None -> ()
+  | Some el -> El.set_prop (El.Prop.bool disabled) false el
+
 let post () =
+  disable_button () ;
   match Document.find_el_by_id G.document pasteur with
   | None ->
+    enable_button () ;
     Fut.return (Error (Jv.Error.v err_element_pasteur_not_found))
   | Some el ->
     let form = Form.of_el el in
@@ -77,28 +114,16 @@ let post () =
       let[@warning "-8"] (`Json_web_key key : [ `Buffer of _ | `Json_web_key of _ ]) = key in
       let* key = Fut.return (Base64.encode (Base64.data_of_binary_jstr (Json.encode key))) in
       let* res = Fetch.request (Fetch.Request.v ~init:init (Jstr.v "/")) in
-      let* res = Fetch.Body.json (Fetch.Response.as_body res) in
-      let code = Jv.get res "code" |> Jv.to_jstr in
-      let hl = Jv.find res "hl" |> Option.map Jv.to_string in
-      let ln = Jv.find res "ln" |> Option.map Jv.to_bool in
-      let raw = Jv.find res "raw" |> Option.map Jv.to_bool in
-      let* path = make_path ?hl ?ln ?raw ~key code in
-      let* uri = Fut.return (Uri.of_jstr (Jstr.concat [ Uri.to_jstr (Window.location G.window); path ])) in
-      Window.set_location G.window uri ; Fut.ok () 
+      handle_response ~key res >>| enable_button
     | Some (`String _), _ ->
       let init = Fetch.Request.init ~body:(Fetch.Body.of_form_data data) ~method':post () in
       let* res = Fetch.request (Fetch.Request.v ~init:init (Jstr.v "/")) in
-      let* res = Fetch.Body.json (Fetch.Response.as_body res) in
-      let code = Jv.get res "code" |> Jv.to_jstr in
-      let hl = Jv.find res "hl" |> Option.map Jv.to_string in
-      let ln = Jv.find res "ln" |> Option.map Jv.to_bool in
-      let raw = Jv.find res "raw" |> Option.map Jv.to_bool in
-      let* path = make_path ?hl ?ln ?raw code in
-      let* uri = Fut.return (Uri.of_jstr (Jstr.concat [ Uri.to_jstr (Window.location G.window); path ])) in
-      Window.set_location G.window uri ; Fut.ok () 
+      handle_response res >>| enable_button
     | Some (`File _), _ ->
+      enable_button () ;
       Fut.return (Error (Jv.Error.v err_element_paste_is_not_a_string))
     | None, _ ->
+      enable_button () ;
       Fut.return (Error (Jv.Error.v err_element_paste_not_found)) )
 
 let raw = Jstr.v "raw"
