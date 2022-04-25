@@ -62,20 +62,49 @@ let stream_of_body body =
   Httpaf.Body.schedule_read body ~on_eof ~on_read ;
   stream
 
+let always x = fun _ -> x
+
+let guess_size headers =
+  let open Multipart_form in
+  match Header.assoc (Field_name.v "Content-Length") headers with
+  | Field.Field (_, Field.Field, v) :: _ ->
+    let str = Unstrctrd.to_utf_8_string v in
+    Int64.of_string_opt str
+  | _ -> None
+
+let to_bindings stream =
+  let rec go acc stream =
+    Lwt_stream.get stream >>= function
+    | None -> Lwt.return_ok acc
+    | Some (id, headers, stream') ->
+      let size = guess_size headers in
+      match id, size with
+      | Some key, Some size when size >= 1_000_000L ->
+        Lwt.return_error `Too_big_paste
+      | Some key, Some _ ->
+        Lwt_stream.to_list stream' >|= String.concat "" >>= fun contents ->
+        go ((key, contents) :: acc) stream
+      | Some key, None ->
+        let rec flat (contents, size) stream' = Lwt_stream.get stream' >>= function
+          | Some chunk when String.length chunk + size >= 1_000_000 ->
+            Lwt.return_error `Too_big_paste
+          | Some chunk -> flat (chunk :: contents, size + String.length chunk) stream'
+          | None -> Lwt.return_ok (String.concat "" (List.rev contents)) in
+        ( flat ([], 0) stream' >>= function
+        | Ok contents -> go ((key, contents) :: acc) stream
+        | Error _ as err -> Lwt.return err )
+      | None, _ ->
+        Lwt_stream.junk_while (always true) stream' >>= fun () ->
+        go acc stream in
+  go [] stream
+
 let extract_parts content_type body =
   let stream = stream_of_body body in
   let `Parse th, stream = Multipart_form_lwt.stream
     ~identify stream content_type in
-  th >>= fun result ->
+  Lwt.both th (to_bindings stream) >>= fun (res0, res1) ->
   Httpaf.Body.close_reader body ;
-  match result with
-  | Error _ as err -> Lwt.return err
-  | Ok _tree ->
-    Lwt_stream.to_list stream
-    >>= Lwt_list.filter_map_s (fun (id, headers, stream) ->
-      Lwt_stream.to_list stream
-      >|= String.concat ""
-      >>= fun contents -> match id with
-      | Some key -> Lwt.return_some (key, contents)
-      | None -> Lwt.return_none)
-    >>= fun bindings -> Lwt.return_ok bindings
+  match res0, res1 with
+  | Error err0, _ -> Lwt.return_error err0
+  | Ok _tree, Error err1 -> Lwt.return_error err1
+  | Ok _tree, Ok bindings -> Lwt.return_ok bindings
