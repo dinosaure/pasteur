@@ -1,6 +1,9 @@
 open Httpaf
 open Lwt.Infix
 
+let src = Logs.Src.create "pasteur" ~doc:"logs git's pasteur"
+module Log = (val Logs.src_log src : Logs.LOG)
+
 let extract_content_type request =
   let headers = request.Request.headers in
   match Httpaf.Headers.get headers "content-type" with
@@ -52,7 +55,9 @@ let stream_of_body body =
   let rec on_eof () =
     push None
   and on_read buf ~off ~len =
-    push (Some (Bigstringaf.substring buf ~off ~len)) ;
+    let str = Bigstringaf.substring buf ~off ~len in
+    Log.debug (fun m -> m "Received: @[<hov>%a@]" (Hxd_string.pp Hxd.default) str) ;
+    push (Some str) ;
     Httpaf.Body.schedule_read body ~on_eof ~on_read in
   Httpaf.Body.schedule_read body ~on_eof ~on_read ;
   stream
@@ -67,7 +72,7 @@ let extract_parts content_type body =
   | Error _ as err -> Lwt.return err
   | Ok _tree ->
     Lwt_stream.to_list stream
-    >>= Lwt_list.filter_map_p (fun (id, headers, stream) ->
+    >>= Lwt_list.filter_map_s (fun (id, headers, stream) ->
       Lwt_stream.to_list stream
       >|= String.concat ""
       >>= fun contents -> match id with

@@ -59,24 +59,33 @@ module Make
 
   let reload _console active_branch remote key =
     Store.find active_branch key >>= function
-    | Some contents -> Lwt.return (Some contents)
+    | Some contents -> Lwt.return_ok (Some contents)
     | None ->
       Sync.pull active_branch remote `Set >>= function
-      | Ok `Empty | Ok (`Head _) -> Store.find active_branch key
-      | Error (`Msg err) -> failwith err
-      | Error (`Conflict err) -> Fmt.failwith "Conflict! [%s]" err
+      | Ok `Empty | Ok (`Head _) -> Store.find active_branch key >>= fun v -> Lwt.return_ok v
+      | Error err -> Lwt.return_error (Rresult.R.msgf "%a" Sync.pp_pull_error err)
 
   let show ?ln:(_ = false) ?hl console active_branch remote reqd target =
     let open Httpaf in
     let* () = log console "Want to access to: %a." Fmt.(Dump.list string) target in
     reload console active_branch remote target >>= function
-    | None ->
+    | Error (`Msg err) ->
+      let* () = log console "Got an error when reloading database: %s." err in
+      let str = "Impossible to reload our internal database." in
+      let headers = Headers.of_list
+        [ "content-type", "text/plain"
+        ; "content-length", string_of_int (String.length str)
+        ; "connection", "close" ] in
+      let response = Response.create ~headers `Internal_server_error in
+      Reqd.respond_with_string reqd response str ;
+      Lwt.return_unit
+    | Ok None ->
       let contents = Fmt.str "%s Not found." (String.concat "/" target) in
       let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
       let response = Response.create ~headers `Not_found in
       Reqd.respond_with_string reqd response contents ;
       log console "Response: 404 Not found for %a." Fmt.(Dump.list string) target
-    | Some { Blob.contents; encrypted; } ->
+    | Ok (Some { Blob.contents; encrypted; }) ->
       let code = Option.map Language.to_string hl in
       let html = Show.html ?code ~encrypted contents in
       let contents = Fmt.str "%a%!" (Tyxml.Html.pp ()) html in
@@ -90,13 +99,23 @@ module Make
     let open Httpaf in
     let* () = log console "Want to access to: %a (raw)." Fmt.(Dump.list string) target in
     reload console active_branch remote target >>= function
-    | None ->
-      let contents = Fmt.str "%s Not found." (String.concat "/" target) in
+    | Error (`Msg err) ->
+      let* () = log console "Got an error when reloading database: %s." err in
+      let str = "Impossible to reload our internal database." in
+      let headers = Headers.of_list
+        [ "content-type", "text/plain"
+        ; "content-length", string_of_int (String.length str)
+        ; "connection", "close" ] in
+      let response = Response.create ~headers `Internal_server_error in
+      Reqd.respond_with_string reqd response str ;
+      Lwt.return_unit
+    | Ok None ->
+      let contents = Fmt.str "%s not found." (String.concat "/" target) in
       let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
       let response = Response.create ~headers `Not_found in
       Reqd.respond_with_string reqd response contents ;
       log console "Response: 404 Not found for %a." Fmt.(Dump.list string) target
-    | Some { Blob.contents; _ } ->
+    | Ok (Some { Blob.contents; _ }) ->
       let headers = Headers.of_list [ "content-type", "text/plain; charset=utf-8"
                                     ; "content-length", string_of_int (String.length contents) ] in
       let response = Response.create ~headers `OK in
@@ -223,33 +242,52 @@ module Make
       Lwt.return_unit
 
   let push console active_branch remote ?(author= "pasteur") key value =
-    let commit0 = match Store.status active_branch with
-      | `Branch branch -> Store.Branch.get (Store.repo active_branch) branch
-      | `Commit commit -> Lwt.return commit
-      | `Empty -> failwith "Empty repository" in
-    commit0 >>= fun commit0 ->
-    let _, date = Pclock.now_d_ps () in
+    let parents () = match Store.status active_branch with
+      | `Branch branch ->
+        Store.Branch.get (Store.repo active_branch) branch >>= fun commit ->
+        Lwt.return [ commit ]
+      | `Commit commit -> Lwt.return [ commit ]
+      | `Empty -> Lwt.return [] in
+    parents () >>= fun parents ->
+    let date = Int64.of_float Ptime.Span.(to_float_s (v (Pclock.now_d_ps ()))) in
     let info () = Store.Info.v ~author ~message:(String.concat "/" key) date in
-    Store.set ~parents:[ commit0 ] ~info active_branch key value >>= function
-    | Error (`Conflict c) -> Fmt.failwith "Conflict! [%s]" c
-    | Error (`Test_was _) | Error (`Too_many_retries _) -> failwith "Error to update local repository!"
+    Store.set ~parents ~info active_branch key value >>= function
+    | Error (`Conflict err) -> Lwt.return (Rresult.R.error_msgf "Conflict: %s" err)
+    | Error (`Too_many_retries _) -> Lwt.return (Error (`Msg "Too many retries"))
+    | Error (`Test_was _) -> Lwt.return (Error (`Msg "Failing to create a new commit"))
     | Ok () ->
       Sync.push active_branch remote >>= function
-      | Ok `Empty -> failwith "Got an empty repository"
+      | Ok `Empty -> Lwt.return_ok ()
       | Ok (`Head commit1) ->
-        log console "[update] commit:%a -> commit:%a." Store.Commit.pp_hash commit0 Store.Commit.pp_hash commit1
-      | Error `Detached_head -> failwith "Detached head!"
-      | Error (`Msg err) -> failwith err
+        let* () = log console "[update] %a -> commit:%a."
+          Fmt.(Dump.list Store.Commit.pp_hash) parents Store.Commit.pp_hash commit1 in
+        Lwt.return_ok ()
+      | Error err -> Lwt.return_error (Rresult.R.msgf "%a" Sync.pp_push_error err)
 
   let is_on = (=) "on"
 
   let post random console active_branch remote reqd =
     match extract_content_type (Reqd.request reqd) with
-    | None -> assert false (* TODO: redirect to INDEX. *)
+    | None ->
+      let contents = "Bad POST request (invalid or missing Content-Type)." in
+      let headers = Headers.of_list
+        [ "content-type", "text/plain"
+        ; "content-length", string_of_int (String.length contents) ] in
+      let response = Response.create ~headers `Bad_request in
+      Reqd.respond_with_string reqd response contents ;
+      Lwt.return_unit
     | Some content_type ->
       let body = Reqd.request_body reqd in
       extract_parts content_type body >>= function
-      | Error _ as err -> Rresult.R.failwith_error_msg err
+      | Error (`Msg err) ->
+        let* () = log console "Got an error when extracting multipart/form contents: %s." err in
+        let contents = "Bad POST request (malformed POST request)." in
+        let headers = Headers.of_list
+          [ "content-type", "text/plain"
+          ; "content-length", string_of_int (String.length contents) ] in
+        let response = Response.create ~headers `Bad_request in
+        Reqd.respond_with_string reqd response "" ;
+        Lwt.return_unit
       | Ok posts ->
         match List.assoc Paste posts,
               List.assoc_opt Hl posts,
@@ -261,18 +299,31 @@ module Make
           let author = List.assoc_opt User posts in
           let ln = List.exists (function (Ln, _) -> true | _ -> false) posts in
           let raw = List.exists (function (Raw, _) -> true | _ -> false) posts in
-          push console active_branch remote ?author [ random ] { Blob.contents; encrypted; } >>= fun () ->
-          let str = make_paste_json_string ~ln ?hl ~raw random in
-          let headers = Headers.of_list [ "content-type", "application/json"
-                                        ; "content-length", string_of_int (String.length str)
-                                        ; "access-control-allow-origin", "*" ] in
-          let response = Response.create ~headers `OK in
-          Reqd.respond_with_string reqd response str ;
-          Lwt.return ()
+          ( push console active_branch remote ?author [ random ] { Blob.contents; encrypted; }
+            >>= function
+          | Ok () ->
+            let str = make_paste_json_string ~ln ?hl ~raw random in
+            let headers = Headers.of_list [ "content-type", "application/json"
+                                          ; "content-length", string_of_int (String.length str)
+                                          ; "access-control-allow-origin", "*" ] in
+            let response = Response.create ~headers `OK in
+            Reqd.respond_with_string reqd response str ;
+            Lwt.return_unit
+          | Error (`Msg err) ->
+            let* () = log console "Got an error when pushing: %s." err in
+            let str = "Got an error when updating our internal database." in
+            let headers = Headers.of_list 
+              [ "content-type", "text/plain"
+              ; "content-length", string_of_int (String.length str) ] in
+            let response = Response.create ~headers `Internal_server_error in
+            Reqd.respond_with_string reqd response str ;
+            Lwt.return_unit )
         | exception Not_found ->
-          let contents = "Bad POST request." in
-          let headers = Headers.of_list [ "content-length", string_of_int (String.length contents) ] in
-          let response = Response.create ~headers `Not_found in
+          let contents = "Bad POST request (content is required)." in
+          let headers = Headers.of_list
+            [ "content-type", "text/plain"
+            ; "content-length", string_of_int (String.length contents) ] in
+          let response = Response.create ~headers `Bad_request in
           Reqd.respond_with_string reqd response contents ;
           Lwt.return_unit
 
