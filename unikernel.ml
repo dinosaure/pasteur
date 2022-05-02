@@ -398,8 +398,7 @@ module Make
     | tls -> Lwt.return tls
 
   let pull (active_branch, remote) = Sync.pull active_branch remote `Set >>= function
-    | Error (`Msg err) -> failwith err
-    | Error (`Conflict err) -> failwith err
+    | Error err -> Fmt.failwith "%a" Sync.pp_pull_error err
     | Ok (`Empty | `Head _) -> Lwt.return (active_branch, remote)
 
   let provision ~production cfg stack dns =
