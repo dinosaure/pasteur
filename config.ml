@@ -131,7 +131,7 @@ let packages =
   ; package "tyxml"
   ; package "irmin-mirage-git"
   ; package "multipart_form-lwt"
-  ; package "ocplib-json-typed"
+  ; package "json-data-encoding"
   ; package "ezjsonm" ]
 
   let () =
