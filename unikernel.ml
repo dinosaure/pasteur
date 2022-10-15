@@ -43,7 +43,7 @@ module Make
     (_ : sig end)
 = struct
   module Nss = Ca_certs_nss.Make(Pclock)
-  module Paf = Paf_mirage.Make(Time)(Stack.TCP)
+  module Paf = Paf_mirage.Make(Stack.TCP)
   module LE = LE.Make(Time)(Stack)
 
   let ignore_error_handler _ ?request:_ _ _ = ()
@@ -156,7 +156,8 @@ module Make
   (* Try to generate JSON as short as possible by taking advantage of the
      default values for the options (ln, hl, ...). *)
   let make_paste_json_string ?ln ?hl ?raw code =
-   match Json_encoding.construct json { ln; raw; hl; code; } with
+   match Json_encoding.construct json { ln; raw; hl; code; }
+         |> Json_repr.Ezjsonm.repr with
    | #Ezjsonm.t as v -> Ezjsonm.to_string v
    | _ -> assert false
 
