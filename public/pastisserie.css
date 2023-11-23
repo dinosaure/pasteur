@@ -91,6 +91,9 @@ input[type="submit"]{
 	);
 
 }
+pre{
+	width: fit-content;
+}
 
 @media (max-width: 600px) {
   	body{
