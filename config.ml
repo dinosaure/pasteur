@@ -94,7 +94,7 @@ let pasteur_js =
   (enabled_if (= %%{context_name} "default"))
   (deps ../js/pasteur_js.bc.js)
   (target pasteur.js)
-  (action (copy %%{deps} %%{target}))))|dune};
+  (action (copy %%{deps} %%{target}))))|dune}
     ]
   in
   impl ~dune "Pasteur_js" job
@@ -109,12 +109,12 @@ let pasteur_hljs =
  (deps js/pasteur_hljs.bc.js public/highlight.js)
  (target language.default.ml)
  (action (with-stdout-to
-  %%{target} (bash "node js/pasteur_hljs.bc.js"))))|dune};
-      Dune.stanzaf
+  %%{target} (bash "node js/pasteur_hljs.bc.js"))))|dune}
+    ; Dune.stanzaf
         {dune|(rule
  (target language.ml)
  (deps %%{exe:language.default.ml})
- (action (copy %%{exe:language.default.ml} %%{target})))|dune};
+ (action (copy %%{exe:language.default.ml} %%{target})))|dune}
     ]
   in
   let files _ = [ Fpath.v "language.ml" ] in
@@ -126,21 +126,12 @@ let pasteur =
     ~packages:[ package "brr" ~build:true ~scope:`Switch ]
     ~keys:
       [
-        Key.v remote;
-        Key.v port;
-        Key.v https;
-        Key.v email;
-        Key.v hostname;
-        Key.v random_len;
-        Key.v cert_seed;
-        Key.v cert_key_type;
-        Key.v cert_bits;
-        Key.v account_seed;
-        Key.v account_key_type;
-        Key.v account_bits;
-        Key.v production;
+        Key.v remote; Key.v port; Key.v https; Key.v email; Key.v hostname
+      ; Key.v random_len; Key.v cert_seed; Key.v cert_key_type; Key.v cert_bits
+      ; Key.v account_seed; Key.v account_key_type; Key.v account_bits
+      ; Key.v production
       ]
-    (random @-> console @-> time @-> mclock @-> pclock @-> kv_ro @-> stackv4v6
+    (random @-> time @-> mclock @-> pclock @-> kv_ro @-> stackv4v6
    @-> alpn_client @-> git_client @-> job)
 
 let stack = generic_stackv4v6 default_network
@@ -163,22 +154,22 @@ let public = docteur ~extra_deps:[ "public/pasteur.js" ] "relativize://public/"
 
 let packages =
   [
-    package "paf" ~min:"0.5.0";
-    package "paf" ~sublibs:[ "mirage" ] ~min:"0.5.0";
-    package "letsencrypt-mirage";
-    package "uuidm";
-    package "tyxml";
-    package "git-kv" ~min:"0.0.3";
-    package "multipart_form-lwt";
-    package "json-data-encoding";
-    package "data-encoding";
-    package "ezjsonm";
+    package "paf" ~min:"0.5.0"; package "paf" ~sublibs:[ "mirage" ] ~min:"0.5.0"
+  ; package "letsencrypt-mirage"; package "uuidm"; package "tyxml"
+  ; package "git-kv" ~min:"0.0.3"; package "multipart_form-lwt"
+  ; package "json-data-encoding"; package "data-encoding"; package "ezjsonm"
   ]
 
 let () =
   register "pasteur" ~packages
     [
-      pasteur $ default_random $ default_console $ default_time
-      $ default_monotonic_clock $ default_posix_clock $ public $ stack
-      $ http_client $ git;
+      pasteur
+      $ default_random
+      $ default_time
+      $ default_monotonic_clock
+      $ default_posix_clock
+      $ public
+      $ stack
+      $ http_client
+      $ git
     ]
