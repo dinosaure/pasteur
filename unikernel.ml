@@ -4,7 +4,7 @@ open Pasteur
 open Httpaf
 
 module Blob = struct
-  type t = { contents : string; encrypted : bool }
+  type t = { contents: string; encrypted: bool }
 
   let t =
     let open Data_encoding in
@@ -38,13 +38,13 @@ let key_type kt =
 
 module Make
     (Random : Mirage_random.S)
-    (Console : Mirage_console.S)
     (Time : Mirage_time.S)
     (Mclock : Mirage_clock.MCLOCK)
     (Pclock : Mirage_clock.PCLOCK)
     (Public : Mirage_kv.RO)
     (Stack : Tcpip.Stack.V4V6)
-    (HTTP_Client : Http_mirage_client.S) (_ : sig end) =
+    (HTTP_Client : Http_mirage_client.S)
+    (_ : sig end) =
 struct
   module Nss = Ca_certs_nss.Make (Pclock)
   module Paf = Paf_mirage.Make (Stack.TCP)
@@ -52,9 +52,9 @@ struct
   module Store = Git_kv.Make (Pclock)
 
   let ignore_error_handler _ ?request:_ _ _ = ()
-  let log console fmt = Fmt.kstr (Console.log console) fmt
+  let log fmt = Fmt.pr fmt
 
-  let reload _console git key =
+  let reload git key =
     Store.get git key >>= function
     | Ok str -> Lwt.return (Blob.of_string_json str)
     | Error (`Not_found _) -> (
@@ -69,19 +69,19 @@ struct
         | Error (`Msg err) -> Lwt.return_error (`Msg err))
     | Error err -> Lwt.return_error (Rresult.R.msgf "%a" Store.pp_error err)
 
-  let show ?ln:(_ = false) ?hl console git reqd target =
+  let show ?ln:(_ = false) ?hl git reqd target =
     let open Httpaf in
-    let* () = log console "Want to access to: %a." Mirage_kv.Key.pp target in
-    reload console git target >>= function
+    log "Want to access to: %a." Mirage_kv.Key.pp target;
+    reload git target >>= function
     | Error (`Msg err) ->
-        let* () = log console "Got an error when reloading database: %s." err in
+        log "Got an error when reloading database: %s." err;
         let str = "Impossible to reload our internal database." in
         let headers =
           Headers.of_list
             [
-              ("content-type", "text/plain");
-              ("content-length", string_of_int (String.length str));
-              ("connection", "close");
+              ("content-type", "text/plain")
+            ; ("content-length", string_of_int (String.length str))
+            ; ("connection", "close")
             ]
         in
         let response = Response.create ~headers `Internal_server_error in
@@ -95,7 +95,8 @@ struct
         in
         let response = Response.create ~headers `Not_found in
         Reqd.respond_with_string reqd response contents;
-        log console "Response: 404 Not found for %a." Mirage_kv.Key.pp target
+        log "Response: 404 Not found for %a." Mirage_kv.Key.pp target;
+        Lwt.return_unit
     | Ok { Blob.contents; encrypted } ->
         let code = Option.map Language.to_string hl in
         let html = Show.html ?code ~encrypted contents in
@@ -103,29 +104,27 @@ struct
         let headers =
           Headers.of_list
             [
-              ("content-type", "text/html");
-              ("content-length", string_of_int (String.length contents));
+              ("content-type", "text/html")
+            ; ("content-length", string_of_int (String.length contents))
             ]
         in
         let response = Response.create ~headers `OK in
         Reqd.respond_with_string reqd response contents;
         Lwt.return_unit
 
-  let show_raw console git reqd target =
+  let show_raw git reqd target =
     let open Httpaf in
-    let* () =
-      log console "Want to access to: %a (raw)." Mirage_kv.Key.pp target
-    in
-    reload console git target >>= function
+    log "Want to access to: %a (raw)." Mirage_kv.Key.pp target;
+    reload git target >>= function
     | Error (`Msg err) ->
-        let* () = log console "Got an error when reloading database: %s." err in
+        log "Got an error when reloading database: %s." err;
         let str = "Impossible to reload our internal database." in
         let headers =
           Headers.of_list
             [
-              ("content-type", "text/plain");
-              ("content-length", string_of_int (String.length str));
-              ("connection", "close");
+              ("content-type", "text/plain")
+            ; ("content-length", string_of_int (String.length str))
+            ; ("connection", "close")
             ]
         in
         let response = Response.create ~headers `Internal_server_error in
@@ -139,13 +138,14 @@ struct
         in
         let response = Response.create ~headers `Not_found in
         Reqd.respond_with_string reqd response contents;
-        log console "Response: 404 Not found for %a." Mirage_kv.Key.pp target
+        log "Response: 404 Not found for %a." Mirage_kv.Key.pp target;
+        Lwt.return_unit
     | Ok { Blob.contents; _ } ->
         let headers =
           Headers.of_list
             [
-              ("content-type", "text/plain; charset=utf-8");
-              ("content-length", string_of_int (String.length contents));
+              ("content-type", "text/plain; charset=utf-8")
+            ; ("content-length", string_of_int (String.length contents))
             ]
         in
         let response = Response.create ~headers `OK in
@@ -155,10 +155,10 @@ struct
   type dispatch =
     | INDEX
     | GET of {
-        target : Mirage_kv.Key.t;
-        ln : bool;
-        hl : Language.t option;
-        raw : bool;
+          target: Mirage_kv.Key.t
+        ; ln: bool
+        ; hl: Language.t option
+        ; raw: bool
       }
     | CONTENTS of Public.key
     | POST
@@ -167,10 +167,10 @@ struct
   let raw_default = false
 
   type response = {
-    ln : bool option;
-    raw : bool option;
-    hl : Language.t option;
-    code : string;
+      ln: bool option
+    ; raw: bool option
+    ; hl: Language.t option
+    ; code: string
   }
 
   let json =
@@ -217,7 +217,6 @@ struct
     let queries = Uri.query target in
     let target = Astring.String.trim ~drop:(Char.equal '/') (Uri.path target) in
     let target = Mirage_kv.Key.v target in
-
     let key = Mirage_kv.Key.v request.Request.target in
     Public.exists public key >>= function
     | Error err -> Fmt.invalid_arg "%a" Public.pp_error err
@@ -241,19 +240,19 @@ struct
     in
     Fmt.str "%a%!" (Tyxml.Html.pp ()) html
 
-  let index _ reqd =
+  let index reqd =
     let headers =
       Headers.of_list
         [
-          ("content-type", "text/html; charset=utf-8");
-          ("content-length", string_of_int (String.length index_contents));
+          ("content-type", "text/html; charset=utf-8")
+        ; ("content-length", string_of_int (String.length index_contents))
         ]
     in
     let response = Response.create ~headers `OK in
     Reqd.respond_with_string reqd response index_contents;
     Lwt.return ()
 
-  let load console public reqd key =
+  let load public reqd key =
     Public.get public key >>= fun contents ->
     match (contents, Mirage_kv.Key.segments key) with
     | Error _, _ -> assert false
@@ -261,54 +260,54 @@ struct
         let headers =
           Headers.of_list
             [
-              ("content-length", string_of_int (String.length contents));
-              ("content-type", "text/javascript");
-              ("connection", "close");
+              ("content-length", string_of_int (String.length contents))
+            ; ("content-type", "text/javascript"); ("connection", "close")
             ]
         in
         let response = Response.create ~headers `OK in
         Reqd.respond_with_string reqd response contents;
-        log console "%s delivered!" (String.concat "/" path)
+        log "%s delivered!" (String.concat "/" path);
+        Lwt.return_unit
     | Ok contents, [ "pastisserie.css" ] ->
         let headers =
           Headers.of_list
             [
-              ("content-length", string_of_int (String.length contents));
-              ("content-type", "text/css");
-              ("connection", "close");
+              ("content-length", string_of_int (String.length contents))
+            ; ("content-type", "text/css"); ("connection", "close")
             ]
         in
         let response = Response.create ~headers `OK in
         Reqd.respond_with_string reqd response contents;
-        log console "pastisserie.css delivered!"
+        log "pastisserie.css delivered!";
+        Lwt.return_unit
     | Ok contents, _ ->
         let headers =
           Headers.of_list
             [
-              ("content-length", string_of_int (String.length contents));
-              ("connection", "close");
+              ("content-length", string_of_int (String.length contents))
+            ; ("connection", "close")
             ]
         in
         let response = Response.create ~headers `OK in
         Reqd.respond_with_string reqd response contents;
         Lwt.return_unit
 
-  let push console git key value =
+  let push git key value =
     ( Store.change_and_push git @@ fun git ->
       Store.set git key (Blob.to_string_json value) )
     >|= Result.join
 
   let is_on = ( = ) "on"
 
-  let post random console git reqd =
+  let post random git reqd =
     match extract_content_type (Reqd.request reqd) with
     | None ->
         let contents = "Bad POST request (invalid or missing Content-Type)." in
         let headers =
           Headers.of_list
             [
-              ("content-type", "text/plain");
-              ("content-length", string_of_int (String.length contents));
+              ("content-type", "text/plain")
+            ; ("content-length", string_of_int (String.length contents))
             ]
         in
         let response = Response.create ~headers `Bad_request in
@@ -318,29 +317,26 @@ struct
         let body = Reqd.request_body reqd in
         extract_parts content_type body >>= function
         | Error `Too_big_paste ->
-            let* () = log console "Got a big paste, return a bad request." in
+            log "Got a big paste, return a bad request.";
             let contents = "Too big paste." in
             let headers =
               Headers.of_list
                 [
-                  ("content-type", "text/plain");
-                  ("content-length", string_of_int (String.length contents));
+                  ("content-type", "text/plain")
+                ; ("content-length", string_of_int (String.length contents))
                 ]
             in
             let response = Response.create ~headers `Bad_request in
             Reqd.respond_with_string reqd response contents;
             Lwt.return_unit
         | Error (`Msg err) ->
-            let* () =
-              log console
-                "Got an error when extracting multipart/form contents: %s." err
-            in
+            log "Got an error when extracting multipart/form contents: %s." err;
             let contents = "Bad POST request (malformed POST request)." in
             let headers =
               Headers.of_list
                 [
-                  ("content-type", "text/plain");
-                  ("content-length", string_of_int (String.length contents));
+                  ("content-type", "text/plain")
+                ; ("content-length", string_of_int (String.length contents))
                 ]
             in
             let response = Response.create ~headers `Bad_request in
@@ -348,9 +344,9 @@ struct
             Lwt.return_unit
         | Ok posts -> (
             match
-              ( List.assoc Paste posts,
-                List.assoc_opt Hl posts,
-                List.assoc_opt Encrypted posts )
+              ( List.assoc Paste posts
+              , List.assoc_opt Hl posts
+              , List.assoc_opt Encrypted posts )
             with
             | contents, hl, encrypted -> (
                 let random = random () in
@@ -365,7 +361,7 @@ struct
                 let raw =
                   List.exists (function Raw, _ -> true | _ -> false) posts
                 in
-                push console git
+                push git
                   Mirage_kv.Key.(empty / random)
                   { Blob.contents; encrypted }
                 >>= function
@@ -374,9 +370,9 @@ struct
                     let headers =
                       Headers.of_list
                         [
-                          ("content-type", "application/json");
-                          ("content-length", string_of_int (String.length str));
-                          ("access-control-allow-origin", "*");
+                          ("content-type", "application/json")
+                        ; ("content-length", string_of_int (String.length str))
+                        ; ("access-control-allow-origin", "*")
                         ]
                     in
                     let response = Response.create ~headers `OK in
@@ -384,18 +380,16 @@ struct
                     Lwt.return_unit
                 | Error err ->
                     let err = Rresult.R.msgf "%a" Store.pp_write_error err in
-                    let* () =
-                      log console "Got an error when pushing: %a."
-                        Store.pp_write_error err
-                    in
+                    log "Got an error when pushing: %a." Store.pp_write_error
+                      err;
                     let str =
                       "Got an error when updating our internal database."
                     in
                     let headers =
                       Headers.of_list
                         [
-                          ("content-type", "text/plain");
-                          ("content-length", string_of_int (String.length str));
+                          ("content-type", "text/plain")
+                        ; ("content-length", string_of_int (String.length str))
                         ]
                     in
                     let response =
@@ -408,39 +402,35 @@ struct
                 let headers =
                   Headers.of_list
                     [
-                      ("content-type", "text/plain");
-                      ("content-length", string_of_int (String.length contents));
+                      ("content-type", "text/plain")
+                    ; ("content-length", string_of_int (String.length contents))
                     ]
                 in
                 let response = Response.create ~headers `Bad_request in
                 Reqd.respond_with_string reqd response contents;
                 Lwt.return_unit))
 
-  let main random console public git reqd = function
-    | INDEX ->
-        let* () = log console "[dispatch] index" in
-        index console reqd
-    | GET { target; ln; hl; raw = false } ->
-        let* () = log console "[dispatch] get:%a" Mirage_kv.Key.pp target in
-        show ~ln ?hl console git reqd target
-    | GET { target; raw = true; _ } ->
-        let* () = log console "[dispatch] raw:%a" Mirage_kv.Key.pp target in
-        show_raw console git reqd target
+  let main random public git reqd = function
+    | INDEX -> log "[dispatch] index"; index reqd
+    | GET { target; ln; hl; raw= false } ->
+        log "[dispatch] get:%a" Mirage_kv.Key.pp target;
+        show ~ln ?hl git reqd target
+    | GET { target; raw= true; _ } ->
+        log "[dispatch] raw:%a" Mirage_kv.Key.pp target;
+        show_raw git reqd target
     | CONTENTS key ->
-        let* () = log console "[dispatch] contents:%a" Mirage_kv.Key.pp key in
-        load console public reqd key
-    | POST ->
-        let* () = log console "[dispatch] post." in
-        post random console git reqd
+        log "[dispatch] contents:%a" Mirage_kv.Key.pp key;
+        load public reqd key
+    | POST -> log "[dispatch] post."; post random git reqd
 
-  let request_handler random console public git (_ipaddr, _port) reqd =
+  let request_handler random public git (_ipaddr, _port) reqd =
     let open Httpaf in
     let res () =
       Lwt.catch
-        (fun () -> dispatch public reqd >>= main random console public git reqd)
+        (fun () -> dispatch public reqd >>= main random public git reqd)
         (fun exn ->
           let res = Printexc.to_string exn in
-          let* () = log console "Got an error: %s" res in
+          log "Got an error: %s" res;
           let headers = Headers.of_list [ ("connection", "close") ] in
           let response = Response.create ~headers `Internal_server_error in
           Lwt.return
@@ -462,17 +452,12 @@ struct
       let raw = Cstruct.to_string (Random.generate ?g 1024) in
       let safe =
         fold_left
-          ~f:
-            (fun a -> function
-              | ('a' .. 'z' | 'A' .. 'Z' | '0' .. '9') as chr -> chr :: a
-              | _ -> a)
+          ~f:(fun a -> function
+            | ('a' .. 'z' | 'A' .. 'Z' | '0' .. '9') as chr -> chr :: a | _ -> a)
           [] raw
       in
       List.iter
-        (fun chr ->
-          if !pos < len then (
-            Bytes.set res !pos chr;
-            incr pos))
+        (fun chr -> if !pos < len then (Bytes.set res !pos chr; incr pos))
         safe
     done;
     Bytes.unsafe_to_string res
@@ -511,14 +496,14 @@ struct
     | (), Error (`Msg err) -> failwith err
     | (), Ok certificates -> Lwt.return certificates
 
-  let start _random console _time _mclock _pclock public stack http_client ctx
-      _js _hljs =
+  let start _random _time _mclock _pclock public stack http_client ctx _js _hljs
+      =
     let seed = random_bytes (Key_gen.random_length ()) in
     Git_kv.connect ctx (Key_gen.remote ()) >>= fun git ->
     match Key_gen.https () with
     | false ->
         Logs.info (fun m -> m "Initialise an HTTP server (no HTTPS).");
-        let request_handler _flow = request_handler seed console public git in
+        let request_handler _flow = request_handler seed public git in
         let port = Option.value ~default:80 (Key_gen.port ()) in
         Paf.init ~port (Stack.tcp stack) >>= fun service ->
         let http =
@@ -530,25 +515,27 @@ struct
         Logs.info (fun m -> m "Download TLS certificate.");
         provision ~production:(Key_gen.production ())
           {
-            LE.certificate_seed = Key_gen.cert_seed ();
-            LE.certificate_key_type = key_type (Key_gen.cert_key_type ());
-            LE.certificate_key_bits = Some (Key_gen.cert_bits ());
-            LE.email =
+            LE.certificate_seed= Key_gen.cert_seed ()
+          ; LE.certificate_key_type= key_type (Key_gen.cert_key_type ())
+          ; LE.certificate_key_bits= Some (Key_gen.cert_bits ())
+          ; LE.email=
               Option.bind (Key_gen.email ()) (fun e ->
-                  Emile.of_string e |> Result.to_option);
-            LE.account_seed = Key_gen.account_seed ();
-            LE.account_key_type = key_type (Key_gen.account_key_type ());
-            LE.account_key_bits = Some (Key_gen.account_bits ());
-            LE.hostname =
-              Key_gen.hostname () |> Option.get |> Domain_name.of_string_exn
-              |> Domain_name.host_exn;
+                  Emile.of_string e |> Result.to_option)
+          ; LE.account_seed= Key_gen.account_seed ()
+          ; LE.account_key_type= key_type (Key_gen.account_key_type ())
+          ; LE.account_key_bits= Some (Key_gen.account_bits ())
+          ; LE.hostname=
+              Key_gen.hostname ()
+              |> Option.get
+              |> Domain_name.of_string_exn
+              |> Domain_name.host_exn
           }
           stack http_client
         >>= quit_before_expire
         >>= fun certificates ->
         Logs.info (fun m -> m "Got a TLS certificate for the server.");
         let tls = Tls.Config.server ~certificates () in
-        let request_handler _flow = request_handler seed console public git in
+        let request_handler _flow = request_handler seed public git in
         let port = Option.value ~default:443 (Key_gen.port ()) in
         Paf.init ~port (Stack.tcp stack) >>= fun service ->
         let https =
