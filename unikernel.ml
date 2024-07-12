@@ -3,6 +3,96 @@ open Lwt.Syntax
 open Pasteur
 open Httpaf
 
+module K = struct
+  open Cmdliner
+
+  let remote =
+    let doc = Arg.info ~doc:"Remote Git repository." [ "r"; "remote" ] in
+    Arg.(required & opt (some string) None doc)
+
+  let port =
+    let doc = Arg.info ~doc:"Port of HTTP service." [ "p"; "port" ] in
+    Arg.(value & opt int 80 doc)
+
+  let email =
+    let doc = Arg.info ~doc:"Let's encrypt email." [ "email" ] in
+    Arg.(value & opt (some string) None doc)
+
+  let hostname =
+    let doc = Arg.info ~doc:"Hostname of the unikernel." [ "hostname" ] in
+    Arg.(value & opt (some string) None doc)
+
+  let random_len =
+    let doc = Arg.info ~doc:"Length of generated URI." [ "length" ] in
+    Arg.(value & opt int 3 doc)
+
+  let cert_seed =
+    let doc = Arg.info ~doc:"Let's encrypt certificate seed." [ "certificate-seed" ] in
+    Arg.(value & opt (some string) None doc)
+
+  let cert_key_type =
+    let doc = Arg.info ~doc:"Certificate key type." [ "certificate-key-type" ] in
+    Arg.(value & opt (enum X509.Key_type.strings) `RSA doc)
+
+  let cert_bits =
+    let doc = Arg.info ~doc:"Certificate public key bits." [ "certificate-bits" ] in
+    Arg.(value & opt int 4096 doc)
+
+  let account_seed =
+    let doc = Arg.info ~doc:"Let's encrypt account seed." [ "account-seed" ] in
+    Arg.(value & opt (some string) None doc)
+
+  let account_key_type =
+    let doc = Arg.info ~doc:"Account key type." [ "account-key-type" ] in
+    Arg.(value & opt (enum X509.Key_type.strings) `RSA doc)
+
+  let account_bits =
+    let doc = Arg.info ~doc:"Account public key bits." [ "account-bits" ] in
+    Arg.(value & opt int 4096 doc)
+
+  let production =
+    let doc = Arg.info ~doc:"Let's encrypt production environment." [ "production" ] in
+    Arg.(value & flag doc)
+
+  let https =
+    let doc = Arg.info ~doc:"Start an HTTP server with a TLS certificate." [ "https" ] in
+    Arg.(value & flag doc)
+
+  type t =
+    { remote : string
+    ; port : int
+    ; email : string option
+    ; production : bool
+    ; https : bool
+    ; random_len : int
+    ; hostname : string option
+    ; cert_seed : string option
+    ; cert_key_type : X509.Key_type.t
+    ; cert_bits : int
+    ; account_seed : string option
+    ; account_key_type : X509.Key_type.t
+    ; account_bits : int }
+
+  let v remote port email production https random_len hostname
+    cert_seed cert_key_type cert_bits
+    account_seed account_key_type account_bits =
+    { remote
+    ; port
+    ; email
+    ; production
+    ; https
+    ; random_len
+    ; hostname
+    ; cert_seed; cert_key_type; cert_bits
+    ; account_seed; account_key_type; account_bits }
+
+  let setup =
+    Term.(const v
+         $ remote $ port $ email $ production $ https $ random_len $ hostname
+         $ cert_seed $ cert_key_type $ cert_bits
+         $ account_seed $ account_key_type $ account_bits)
+end
+
 module Blob = struct
   type t = { contents: string; encrypted: bool }
 
@@ -496,15 +586,17 @@ struct
     | (), Error (`Msg err) -> failwith err
     | (), Ok certificates -> Lwt.return certificates
 
-  let start _random _time _mclock _pclock public stack http_client ctx _js _hljs
-      =
-    let seed = random_bytes (Key_gen.random_length ()) in
-    Git_kv.connect ctx (Key_gen.remote ()) >>= fun git ->
-    match Key_gen.https () with
+  let start _random _time _mclock _pclock public stack http_client ctx
+      _pasteur_js _pasteur_hljs
+      { K.remote; port; email; production; https; random_len; hostname
+      ; cert_seed; cert_key_type; cert_bits
+      ; account_seed; account_key_type; account_bits }  =
+    let seed = random_bytes random_len in
+    Git_kv.connect ctx remote >>= fun git ->
+    match https with
     | false ->
         Logs.info (fun m -> m "Initialise an HTTP server (no HTTPS).");
         let request_handler _flow = request_handler seed public git in
-        let port = Option.value ~default:80 (Key_gen.port ()) in
         Paf.init ~port (Stack.tcp stack) >>= fun service ->
         let http =
           Paf.http_service ~error_handler:ignore_error_handler request_handler
@@ -513,19 +605,19 @@ struct
         th
     | true ->
         Logs.info (fun m -> m "Download TLS certificate.");
-        provision ~production:(Key_gen.production ())
+        provision ~production
           {
-            LE.certificate_seed= Key_gen.cert_seed ()
-          ; LE.certificate_key_type= key_type (Key_gen.cert_key_type ())
-          ; LE.certificate_key_bits= Some (Key_gen.cert_bits ())
+            LE.certificate_seed= cert_seed
+          ; LE.certificate_key_type= cert_key_type
+          ; LE.certificate_key_bits= Some cert_bits
           ; LE.email=
-              Option.bind (Key_gen.email ()) (fun e ->
+              Option.bind email (fun e ->
                   Emile.of_string e |> Result.to_option)
-          ; LE.account_seed= Key_gen.account_seed ()
-          ; LE.account_key_type= key_type (Key_gen.account_key_type ())
-          ; LE.account_key_bits= Some (Key_gen.account_bits ())
+          ; LE.account_seed
+          ; LE.account_key_type
+          ; LE.account_key_bits= Some account_bits
           ; LE.hostname=
-              Key_gen.hostname ()
+              hostname
               |> Option.get
               |> Domain_name.of_string_exn
               |> Domain_name.host_exn
@@ -536,7 +628,6 @@ struct
         Logs.info (fun m -> m "Got a TLS certificate for the server.");
         let tls = Tls.Config.server ~certificates () in
         let request_handler _flow = request_handler seed public git in
-        let port = Option.value ~default:443 (Key_gen.port ()) in
         Paf.init ~port (Stack.tcp stack) >>= fun service ->
         let https =
           Paf.https_service ~tls ~error_handler:ignore_error_handler

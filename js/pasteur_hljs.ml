@@ -1,6 +1,6 @@
-open Js_of_ocaml
+open Jsoo_runtime
 
-let hljs = Js.Unsafe.js_expr {js|require("../public/highlight.js")|js}
+let hljs = Js.js_expr {js|require("../public/highlight.js")|js}
 let lst = Jv.call hljs "listLanguages" [||] |> Jv.to_list Jv.to_string
 
 let ocamlify s =
