@@ -9,5 +9,5 @@
  (enabled_if (= %{context_name} "default"))
  (name pasteur_hljs)
  (modules pasteur_hljs)
- (libraries fmt brr js_of_ocaml)
+ (libraries fmt brr js_of_ocaml-compiler.runtime)
  (modes js))

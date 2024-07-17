@@ -2,88 +2,25 @@
 
 open Mirage
 
-let remote =
-  let doc = Key.Arg.info ~doc:"Remote Git repository." [ "r"; "remote" ] in
-  Key.(create "remote" Arg.(required string doc))
-
-let port =
-  let doc = Key.Arg.info ~doc:"port of HTTP service." [ "p"; "port" ] in
-  Key.(create "port" Arg.(opt (some int) None doc))
-
-let email =
-  let doc = Key.Arg.info ~doc:"Let's encrypt email." [ "email" ] in
-  Key.(create "email" Arg.(opt (some string) None doc))
-
-let hostname =
-  let doc = Key.Arg.info ~doc:"Hostname of the unikernel." [ "hostname" ] in
-  Key.(create "hostname" Arg.(opt (some string) None doc))
-
-let random_len =
-  let doc = Key.Arg.info ~doc:"Length of generated URI." [ "length" ] in
-  Key.(create "random-length" Arg.(opt int 3 doc))
-
-let cert_seed =
-  let doc =
-    Key.Arg.info ~doc:"Let's encrypt certificate seed." [ "cert-seed" ]
-  in
-  Key.(create "cert-seed" Arg.(opt (some string) None doc))
-
-let cert_key_type =
-  let doc = Key.Arg.info ~doc:"certificate key type" [ "cert-key-type" ] in
-  Key.(create "cert-key-type" Arg.(opt string "RSA" doc))
-
-let cert_bits =
-  let doc = Key.Arg.info ~doc:"certificate public key bits" [ "cert-bits" ] in
-  Key.(create "cert-bits" Arg.(opt int 4096 doc))
-
-let account_seed =
-  let doc =
-    Key.Arg.info ~doc:"Let's encrypt account seed." [ "account-seed" ]
-  in
-  Key.(create "account-seed" Arg.(opt (some string) None doc))
-
-let account_key_type =
-  let doc = Key.Arg.info ~doc:"account key type" [ "account-key-type" ] in
-  Key.(create "account-key-type" Arg.(opt string "RSA" doc))
-
-let account_bits =
-  let doc = Key.Arg.info ~doc:"account public key bits" [ "account-bits" ] in
-  Key.(create "account-bits" Arg.(opt int 4096 doc))
-
-let production =
-  let doc =
-    Key.Arg.info ~doc:"Let's encrypt production environment." [ "production" ]
-  in
-  Key.(create "production" Arg.(opt bool false doc))
-
-let https =
-  let doc =
-    Key.Arg.info ~doc:"Start an HTTP server with a TLS certificate." [ "https" ]
-  in
-  Key.(create "https" Arg.(opt bool false doc))
+let setup = runtime_arg ~pos:__POS__ "Unikernel.K.setup"
 
 let ssh_key =
-  let doc =
-    Key.Arg.info ~doc:"Private ssh key (rsa:<seed> or ed25519:<b64-key>)."
-      [ "ssh-key" ]
-  in
-  Key.(create "ssh-key" Arg.(opt (some string) None doc))
-
-let ssh_password =
-  let doc = Key.Arg.info ~doc:"The private SSH password." [ "ssh-password" ] in
-  Key.(create "ssh-password" Arg.(opt (some string) None doc))
+  Runtime_arg.create ~pos:__POS__
+    {|let open Cmdliner in
+      let doc = Arg.info ~doc:"The private SSH key (rsa:<seed> or ed25519:<b64-key>)." ["ssh-key"] in
+      Arg.(value & opt (some string) None doc)|}
 
 let ssh_authenticator =
-  let doc =
-    Key.Arg.info ~doc:"SSH host key authenticator." [ "ssh-authenticator" ]
-  in
-  Key.(create "ssh_authenticator" Arg.(opt (some string) None doc))
+  Runtime_arg.create ~pos:__POS__
+    {|let open Cmdliner in
+      let doc = Arg.info ~doc:"SSH authenticator." ["ssh-auth"] in
+      Arg.(value & opt (some string) None doc)|}
 
-let tls_authenticator =
-  let doc =
-    Key.Arg.info ~doc:"TLS host authenticator." [ "tls-authenticator" ]
-  in
-  Key.(create "https_authenticator" Arg.(opt (some string) None doc))
+let ssh_password =
+  Runtime_arg.create ~pos:__POS__
+    {|let open Cmdliner in
+      let doc = Arg.info ~doc:"The private SSH password." [ "ssh-password" ] in
+      Arg.(value & opt (some string) None doc)|}
 
 let pasteur_js =
   let dune _info =
@@ -120,50 +57,47 @@ let pasteur_hljs =
   let files _ = [ Fpath.v "language.ml" ] in
   impl ~files ~dune "Pasteur_hljs" job
 
+let packages =
+  [
+    package "paf" ~min:"0.5.0"
+  ; package "paf" ~sublibs:[ "mirage" ] ~min:"0.5.0"
+  ; package "letsencrypt-mirage"
+  ; package "uuidm"
+  ; package "tyxml"
+  ; package "git-kv" ~min:"0.0.3"
+  ; package "multipart_form-lwt"
+  ; package "json-data-encoding"
+  ; package "data-encoding"
+  ; package "ezjsonm"
+  ; package "brr" ~build:true ~scope:`Switch
+  ]
+
 let pasteur =
-  foreign "Unikernel.Make"
+  main "Unikernel.Make"
+    ~packages
+    ~runtime_args:[ setup ]
     ~deps:[ dep pasteur_js; dep pasteur_hljs ]
-    ~packages:[ package "brr" ~build:true ~scope:`Switch ]
-    ~keys:
-      [
-        Key.v remote; Key.v port; Key.v https; Key.v email; Key.v hostname
-      ; Key.v random_len; Key.v cert_seed; Key.v cert_key_type; Key.v cert_bits
-      ; Key.v account_seed; Key.v account_key_type; Key.v account_bits
-      ; Key.v production
-      ]
     (random @-> time @-> mclock @-> pclock @-> kv_ro @-> stackv4v6
-   @-> alpn_client @-> git_client @-> job)
+     @-> alpn_client @-> git_client @-> job)
 
 let stack = generic_stackv4v6 default_network
 let tcp = tcpv4v6_of_stackv4v6 stack
-
-let happy_eyeballs =
-  let dns = generic_dns_client stack in
-  mimic_happy_eyeballs stack dns (generic_happy_eyeballs stack dns)
+let he = generic_happy_eyeballs stack
+let dns = generic_dns_client stack he
 
 let git =
-  merge_git_clients
-    (git_tcp tcp happy_eyeballs)
-    (merge_git_clients
-       (git_ssh ~key:ssh_key ~password:ssh_password
-          ~authenticator:ssh_authenticator tcp happy_eyeballs)
-       (git_http ~authenticator:tls_authenticator tcp happy_eyeballs))
+  let git = mimic_happy_eyeballs stack he dns in
+  git_ssh ~key:ssh_key ~password:ssh_password ~authenticator:ssh_authenticator tcp git
 
-let http_client = paf_client tcp happy_eyeballs
+let http_client =
+  let dns = mimic_happy_eyeballs stack he dns in
+  paf_client tcp dns
+
 let public = docteur ~extra_deps:[ "public/pasteur.js" ] "relativize://public/"
 
-let packages =
-  [
-    package "paf" ~min:"0.5.0"; package "paf" ~sublibs:[ "mirage" ] ~min:"0.5.0"
-  ; package "letsencrypt-mirage"; package "uuidm"; package "tyxml"
-  ; package "git-kv" ~min:"0.0.3"; package "multipart_form-lwt"
-  ; package "json-data-encoding"; package "data-encoding"; package "ezjsonm"
-  ]
-
 let () =
-  register "pasteur" ~packages
-    [
-      pasteur
+  register "pasteur"
+    [ pasteur
       $ default_random
       $ default_time
       $ default_monotonic_clock
