@@ -1,26 +1,9 @@
+(* mirage >= 4.8.0 & < 4.9.0 *)
 (* (c) Romain Calascibetta 2019 *)
 
 open Mirage
 
 let setup = runtime_arg ~pos:__POS__ "Unikernel.K.setup"
-
-let ssh_key =
-  Runtime_arg.create ~pos:__POS__
-    {|let open Cmdliner in
-      let doc = Arg.info ~doc:"The private SSH key (rsa:<seed> or ed25519:<b64-key>)." ["ssh-key"] in
-      Arg.(value & opt (some string) None doc)|}
-
-let ssh_authenticator =
-  Runtime_arg.create ~pos:__POS__
-    {|let open Cmdliner in
-      let doc = Arg.info ~doc:"SSH authenticator." ["ssh-auth"] in
-      Arg.(value & opt (some string) None doc)|}
-
-let ssh_password =
-  Runtime_arg.create ~pos:__POS__
-    {|let open Cmdliner in
-      let doc = Arg.info ~doc:"The private SSH password." [ "ssh-password" ] in
-      Arg.(value & opt (some string) None doc)|}
 
 let pasteur_js =
   let dune _info =
@@ -77,7 +60,7 @@ let pasteur =
     ~packages
     ~runtime_args:[ setup ]
     ~deps:[ dep pasteur_js; dep pasteur_hljs ]
-    (random @-> time @-> mclock @-> pclock @-> kv_ro @-> stackv4v6
+    (time @-> mclock @-> pclock @-> kv_ro @-> stackv4v6
      @-> alpn_client @-> git_client @-> job)
 
 let stack = generic_stackv4v6 default_network
@@ -87,7 +70,7 @@ let dns = generic_dns_client stack he
 
 let git =
   let git = mimic_happy_eyeballs stack he dns in
-  git_ssh ~key:ssh_key ~password:ssh_password ~authenticator:ssh_authenticator tcp git
+  git_ssh tcp git
 
 let http_client =
   let dns = mimic_happy_eyeballs stack he dns in
@@ -98,7 +81,6 @@ let public = docteur ~extra_deps:[ "public/pasteur.js" ] "relativize://public/"
 let () =
   register "pasteur"
     [ pasteur
-      $ default_random
       $ default_time
       $ default_monotonic_clock
       $ default_posix_clock
