@@ -127,7 +127,6 @@ let key_type kt =
       exit argument_error
 
 module Make
-    (Random : Mirage_random.S)
     (Time : Mirage_time.S)
     (Mclock : Mirage_clock.MCLOCK)
     (Pclock : Mirage_clock.PCLOCK)
@@ -539,7 +538,7 @@ struct
     let res = Bytes.create len in
     let pos = ref 0 in
     while !pos < len do
-      let raw = Cstruct.to_string (Random.generate ?g 1024) in
+      let raw = Mirage_crypto_rng.generate ?g 1024 in
       let safe =
         fold_left
           ~f:(fun a -> function
@@ -586,7 +585,7 @@ struct
     | (), Error (`Msg err) -> failwith err
     | (), Ok certificates -> Lwt.return certificates
 
-  let start _random _time _mclock _pclock public stack http_client ctx
+  let start _time _mclock _pclock public stack http_client ctx
       _pasteur_js _pasteur_hljs
       { K.remote; port; email; production; https; random_len; hostname
       ; cert_seed; cert_key_type; cert_bits
@@ -627,6 +626,7 @@ struct
         >>= fun certificates ->
         Logs.info (fun m -> m "Got a TLS certificate for the server.");
         let tls = Tls.Config.server ~certificates () in
+        let tls = Result.get_ok tls in
         let request_handler _flow = request_handler seed public git in
         Paf.init ~port (Stack.tcp stack) >>= fun service ->
         let https =
