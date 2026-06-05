@@ -1,0 +1,23 @@
+name: pasteur
+on: [push, pull_request]
+jobs:
+  tests:
+    name: Tests
+    strategy:
+      matrix:
+        ocaml-version: [5.4.0]
+        operating-system: [ubuntu-latest]
+    runs-on: ${{ matrix.operating-system }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Use OCaml ${{ matrix.ocaml-version }}
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: ${{ matrix.ocaml-version }}
+          opam-local-packages: |
+            *.opam
+      - name: Install dependencies
+        run: opam install pasteur --verbose-on=pasteur
+      - name: Check pasteur.hvt
+        run: file $(opam var bin)/pasteur.hvt
