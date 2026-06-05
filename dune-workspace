@@ -1,0 +1,7 @@
+(lang dune 3.0)
+(context (default))
+(context (default
+ (name solo5)
+ (host default)
+ (toolchain solo5)
+ (disable_dynamically_linked_foreign_archives true)))
