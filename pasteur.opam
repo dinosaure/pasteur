@@ -11,6 +11,8 @@ depends: [
   "dune" {>= "3.0.0"}
   "js_of_ocaml-compiler"
   "mirage-crypto-rng-mkernel"
+  "mirage-ptime"
+  "brr"
   "vifu"
   "flux"
   "cattery"
@@ -21,10 +23,16 @@ build: [
 ]
 synopsis: "A pastebin as an unikernel in OCaml"
 pin-depends: [
-  [ "zarith.dev"  "git+https://github.com/mirage/Zarith.git#df8969d9bb95cffca13e31a615189ab27ada0684" ]
-  [ "mfat.dev"    "git+https://github.com/robur-coop/mfat.git#6354e2db1068cb835450637f1b0f7211b510a9b3" ]
-  [ "flux.dev"    "git+https://github.com/robur-coop/flux.git#f1d0957ffa5b91cac41d7e6c694e0337fb0d3844" ]
-  [ "fluxt.dev"   "git+https://github.com/robur-coop/flux.git#f1d0957ffa5b91cac41d7e6c694e0337fb0d3844" ]
-  [ "hxd.dev"     "git+https://github.com/dinosaure/hxd.git#2fac0fe04c433d32f4c55d9f4f18de3a8bb353ec" ]
-  [ "mcrunch.dev" "git+https://github.com/robur-coop/mcrunch.git#69cc69b4392bf48721c25e0adefd05b111c531b7" ]
+  [ "zarith.dev"              "git+https://github.com/mirage/Zarith.git#df8969d9bb95cffca13e31a615189ab27ada0684" ]
+  [ "mfat.dev"                "git+https://github.com/robur-coop/mfat.git#6354e2db1068cb835450637f1b0f7211b510a9b3" ]
+  [ "flux.dev"                "git+https://github.com/robur-coop/flux.git#e45db203d25218fb3eb222743d6cf9b0ee15507c" ]
+  [ "fluxt.dev"               "git+https://github.com/robur-coop/flux.git#e45db203d25218fb3eb222743d6cf9b0ee15507c" ]
+  [ "hxd.dev"                 "git+https://github.com/dinosaure/hxd.git#2fac0fe04c433d32f4c55d9f4f18de3a8bb353ec" ]
+  [ "mcrunch.dev"             "git+https://github.com/robur-coop/mcrunch.git#69cc69b4392bf48721c25e0adefd05b111c531b7" ]
+  [ "mkernel.dev"             "git+https://github.com/robur-coop/mkernel.git#ee5c8451b5ac3a15e9894ddfe977d372604aa335" ]
+  [ "mnet.dev"                "git+https://github.com/robur-coop/mnet.git#8c6d58aa49ebadb6a237332aca9440beb1f63ac7" ]
+  [ "mnet-dns.dev"            "git+https://github.com/robur-coop/mnet.git#8c6d58aa49ebadb6a237332aca9440beb1f63ac7" ]
+  [ "mnet-happy-eyeballs.dev" "git+https://github.com/robur-coop/mnet.git#8c6d58aa49ebadb6a237332aca9440beb1f63ac7" ]
+  [ "mnet-tls.dev"            "git+https://github.com/robur-coop/mnet.git#8c6d58aa49ebadb6a237332aca9440beb1f63ac7" ]
+  [ "mnet-cli.dev"            "git+https://github.com/robur-coop/mnet.git#8c6d58aa49ebadb6a237332aca9440beb1f63ac7" ]
 ]
