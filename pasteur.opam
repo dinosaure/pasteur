@@ -1,0 +1,30 @@
+opam-version: "2.0"
+maintainer: "Romain Calascibetta <romain.calascibetta@gmail.com>"
+authors: ["Romain Calascibetta <romain.calascibetta@gmail.com>"]
+homepage: "https://github.com/dinosaure/pasteur"
+dev-repo: "git+https://github.com/dinosaure/pasteur.git"
+bug-reports: "https://github.com/dinosaure/pasteur/issues"
+license: "MIT"
+
+depends: [
+  "ocaml" {>= "5.3.0"}
+  "dune" {>= "3.0.0"}
+  "js_of_ocaml-compiler"
+  "mirage-crypto-rng-mkernel"
+  "vifu"
+  "flux"
+  "cattery"
+  "mcrunch"
+]
+build: [
+  [make "all"]
+]
+synopsis: "A pastebin as an unikernel in OCaml"
+pin-depends: [
+  [ "zarith.dev"  "git+https://github.com/mirage/Zarith.git#df8969d9bb95cffca13e31a615189ab27ada0684" ]
+  [ "mfat.dev"    "git+https://github.com/robur-coop/mfat.git#6354e2db1068cb835450637f1b0f7211b510a9b3" ]
+  [ "flux.dev"    "git+https://github.com/robur-coop/flux.git#f1d0957ffa5b91cac41d7e6c694e0337fb0d3844" ]
+  [ "fluxt.dev"   "git+https://github.com/robur-coop/flux.git#f1d0957ffa5b91cac41d7e6c694e0337fb0d3844" ]
+  [ "hxd.dev"     "git+https://github.com/dinosaure/hxd.git#2fac0fe04c433d32f4c55d9f4f18de3a8bb353ec" ]
+  [ "mcrunch.dev" "git+https://github.com/robur-coop/mcrunch.git#69cc69b4392bf48721c25e0adefd05b111c531b7" ]
+]

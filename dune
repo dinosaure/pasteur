@@ -1,0 +1,77 @@
+(executable
+ (name main)
+ (modules main documents languages index show)
+ (link_flags :standard -cclib "-z solo5-abi=hvt")
+ (libraries
+  miou
+  mkernel
+  mnet
+  mnet-cli
+  hxd.core
+  hxd.string
+  mhttp
+  mirage-crypto-rng-mkernel
+  angstrom
+  cattery
+  lru
+  mfat.bos
+  fluxt.angstrom
+  re
+  gmp
+  cachet
+  vifu
+  cmdliner
+  logs.fmt
+  logs.cli
+  fmt.cli)
+ (foreign_stubs
+  (language c)
+  (names manifest)))
+
+(rule
+ (targets manifest.c)
+ (deps manifest.json)
+ (enabled_if
+  (= %{context_name} "solo5"))
+ (action
+  (run solo5-elftool gen-manifest manifest.json manifest.c)))
+
+(rule
+ (targets manifest.c)
+ (enabled_if
+  (= %{context_name} "default"))
+ (action
+  (write-file manifest.c "")))
+
+(rule
+ (targets languages.ml)
+ (deps extract.ml highlight.min.js)
+ (action
+  (with-stdout-to
+   languages.ml
+   (run ocaml extract.ml highlight.min.js))))
+
+(executable
+ (name script)
+ (modules script)
+ (modes js)
+ (libraries fmt brr))
+
+(rule
+ (targets documents.ml)
+ (deps highlight.min.js script.bc.js highlight.css pastisserie.css)
+ (action
+  (with-stdout-to
+   documents.ml
+   (run
+    mcrunch
+    --file
+    highlight:highlight.min.js
+    --file
+    style:highlight.css
+    --file
+    script:script.bc.js
+    --file
+    pastisserie:pastisserie.css))))
+
+(vendored_dirs vendors)
