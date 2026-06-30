@@ -111,6 +111,23 @@ The unikernel binary takes its configuration on the command line:
 The two device *names*, `service` (net) and `pasteur` (block), are fixed by
 `manifest.json` and must match whatever you wire up on the host side.
 
+### Hard disk capacity
+
+All resources have their limits, and the hard drive (formatted as FAT32) is no
+exception. Pasteur maintains an LRU cache of the files available on the block
+device and treats the storage capacity of that block device as a limit. If this
+limit is reached, the oldest files are deleted to make room for new ones.
+
+The oldest files are initially determined by their creation dates, and
+subsequently by their last access dates. If a snippet has **not** been read for
+a long time, it is highly likely that it will be deleted if the specified limit
+is reached.
+
+It should be noted that, as the format is FAT32, it may be necessary, due to
+fragmentation, to delete several files in order to add just only new one. Users
+may be advised to _defragment_ (using `mfat defrag`) the block device if they
+have the opportunity to restart the unikernel.
+
 ---
 
 # Deployment
